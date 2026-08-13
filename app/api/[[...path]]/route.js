@@ -189,8 +189,39 @@ async function handler(request, { params }) {
 
     // -------- LOADS --------
     if (path === 'loads' && method === 'GET') {
-      const list = await db.collection('loads').find({}).sort({ createdAt: -1 }).toArray()
-      return json(clean(list))
+      const url = new URL(request.url)
+      const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10))
+      const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10)))
+      const status = url.searchParams.get('status')
+      const companyId = url.searchParams.get('companyId')
+      const shipmentType = url.searchParams.get('shipmentType')
+      const loadDate = url.searchParams.get('date')
+      const q = (url.searchParams.get('q') || '').trim()
+
+      const filter = {}
+      if (status && status !== 'all') filter.status = status
+      if (companyId && companyId !== 'all') filter.companyId = companyId
+      if (shipmentType && shipmentType !== 'all') filter.shipmentType = shipmentType
+      if (loadDate) filter.loadDate = loadDate
+
+      if (q) {
+        const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        // Also lookup companies whose name matches q, filter by those companyIds too
+        const matchedCompanies = await db.collection('companies').find({ name: rx }, { projection: { id: 1 } }).toArray()
+        const companyIds = matchedCompanies.map(c => c.id)
+        const orClauses = [{ destCity: rx }, { destCountry: rx }]
+        if (companyIds.length) orClauses.push({ companyId: { $in: companyIds } })
+        filter.$or = orClauses
+      }
+
+      const total = await db.collection('loads').countDocuments(filter)
+      const items = await db.collection('loads')
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .toArray()
+      return json({ items: clean(items), total, page, pageSize })
     }
     if (path === 'loads' && method === 'POST') {
       const body = await request.json()
@@ -286,15 +317,23 @@ async function handler(request, { params }) {
 
     // -------- DASHBOARD --------
     if (path === 'dashboard' && method === 'GET') {
-      const all = await db.collection('loads').find({}).toArray()
-      const counts = {
-        total: all.length,
-        pending: all.filter(l => l.status === 'created').length,
-        planning: all.filter(l => l.status === 'planning').length,
-        planned: all.filter(l => l.status === 'planned' || l.status === 'in_transit').length,
-        delivered: all.filter(l => l.status === 'delivered' || l.status === 'shipped').length,
-      }
-      return json(counts)
+      const col = db.collection('loads')
+      const [total, pending, planning, planned, inTransit, delivered, shipped] = await Promise.all([
+        col.countDocuments({}),
+        col.countDocuments({ status: 'created' }),
+        col.countDocuments({ status: 'planning' }),
+        col.countDocuments({ status: 'planned' }),
+        col.countDocuments({ status: 'in_transit' }),
+        col.countDocuments({ status: 'delivered' }),
+        col.countDocuments({ status: 'shipped' }),
+      ])
+      return json({
+        total,
+        pending,
+        planning,
+        planned: planned + inTransit,
+        delivered: delivered + shipped,
+      })
     }
 
     // -------- SEED (dev helper) --------

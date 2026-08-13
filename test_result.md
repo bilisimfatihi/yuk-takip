@@ -171,7 +171,7 @@ backend:
         agent: "testing"
         comment: "✅ All tests passed. GET /api/vehicles returns list, POST creates vehicle with UUID, PUT updates (type, plate, active), DELETE removes vehicle."
 
-  - task: "Loads CRUD + status transitions + planning"
+  - task: "Loads CRUD + status transitions + planning + pagination + filters"
     implemented: true
     working: true
     file: "/app/app/api/[[...path]]/route.js"
@@ -191,8 +191,46 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ All critical tests passed. Verified: (1) ic_nakliye loads start with status='planning' and 1 history entry, (2) musteri_kendisi loads start with status='created', (3) GET /api/loads returns list, GET /api/loads/:id returns single, (4) PUT updates fields but preserves statusHistory and createdAt (tested by attempting to overwrite them), (5) POST /api/loads/:id/plan sets status='planned', assigns driver/vehicle, appends history (2 entries total), (6) POST /api/loads/:id/status changes status and appends history (3 entries total), (7) Invalid status returns 400, (8) DELETE works. StatusHistory is append-only as required."
+      - working: "NA"
+        agent: "main"
+        comment: |
+          UPDATED - Added server-side pagination and filtering to GET /api/loads.
+          Query params (all optional):
+            - page (default 1, min 1)
+            - pageSize (default 50, max 200)
+            - status = one of created|planning|planned|in_transit|delivered|shipped|cancelled|all
+            - companyId = uuid or 'all'
+            - shipmentType = ic_nakliye|musteri_kendisi|musteri_kargo|nakliyeci|all
+            - date = YYYY-MM-DD (matches loadDate exactly)
+            - q = free-text; case-insensitive regex on destCity/destCountry, and also
+              matches loads whose companyId is in the set of companies whose name matches q.
+          Response shape CHANGED from array to: {items:[...], total:<int>, page, pageSize}.
+          Uses countDocuments() for total, then .find(filter).skip().limit().toArray().
+          Regex is properly escaped to prevent injection. Other endpoints unchanged.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ RETESTED - Pagination & Filtering (11/11 tests passed)
+          
+          Comprehensive testing of updated GET /api/loads endpoint completed successfully:
+          
+          1. ✅ Response shape: Returns {items, total, page, pageSize} as expected (BREAKING CHANGE from array)
+          2. ✅ Pagination: Tested with 55 loads - page=1 returns 50 items, page=2 returns 5 items, page=3 returns 0 items (past end). Total correctly reflects 55 across all pages.
+          3. ✅ PageSize cap: pageSize=500 correctly capped at 200
+          4. ✅ Status filter: ?status=planning and ?status=created return only matching loads, total reflects filtered count
+          5. ✅ CompanyId filter: ?companyId=<uuid> returns only that company's loads
+          6. ✅ ShipmentType filter: ?shipmentType=ic_nakliye returns only ic_nakliye loads
+          7. ✅ Date filter: ?date=YYYY-MM-DD matches loadDate exactly
+          8. ✅ Q filter (company name): ?q=zeta finds loads via company name lookup (case-insensitive)
+          9. ✅ Combined filters: Multiple filters use AND logic correctly
+          10. ✅ Sort: Items sorted by createdAt DESC (newest first)
+          11. ✅ Regex safety: Special chars (.*+?^${}()|[]\) properly escaped, no crashes
+          
+          Minor: Q filter with Turkish characters - ?q=izmir (English i) does not match destCity=İzmir (Turkish İ) due to JavaScript regex locale limitations. This is expected behavior as JS regex 'i' flag uses English case rules. Exact Turkish character matches work correctly (?q=İzmir finds İzmir).
+          
+          All critical functionality working. No _id fields in responses (UUID only).
 
-  - task: "Dashboard counts"
+  - task: "Dashboard counts (parallel countDocuments)"
     implemented: true
     working: true
     file: "/app/app/api/[[...path]]/route.js"
@@ -206,6 +244,31 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ All tests passed. GET /api/dashboard returns correct structure with all required keys (total, pending, planning, planned, delivered). Verified counts match actual load statuses by comparing with GET /api/loads results. All counts are integers and accurate."
+      - working: "NA"
+        agent: "main"
+        comment: |
+          OPTIMIZED - /api/dashboard no longer loads all loads into memory. It now runs
+          7 parallel countDocuments() queries via Promise.all(): total, created,
+          planning, planned, in_transit, delivered, shipped. Response shape unchanged:
+          {total, pending (=created), planning, planned (=planned+in_transit),
+           delivered (=delivered+shipped)}.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ RETESTED - Parallel countDocuments (3/3 tests passed)
+          
+          Comprehensive testing of optimized GET /api/dashboard endpoint completed successfully:
+          
+          1. ✅ Response structure: Returns {total, pending, planning, planned, delivered} with all values as integers
+          2. ✅ Semantic mapping verified with 17 test loads across all statuses:
+             - pending == count(status='created') → Expected: 2, Got: 2 ✅
+             - planning == count(status='planning') → Expected: 3, Got: 3 ✅
+             - planned == count(status='planned') + count(status='in_transit') → Expected: 6, Got: 6 ✅
+             - delivered == count(status='delivered') + count(status='shipped') → Expected: 5, Got: 5 ✅
+             - total == countDocuments({}) including cancelled → Expected: 17, Got: 17 ✅
+          3. ✅ Performance: Parallel countDocuments implementation working correctly
+          
+          All counts accurate. Response shape unchanged from previous version.
 
   - task: "Seed endpoint"
     implemented: true
@@ -276,4 +339,76 @@ agent_communication:
       
       All responses use UUID string ids (no MongoDB _id field). No critical issues found.
       
+  - agent: "main"
+    message: |
+      PERFORMANCE UPDATE - Please retest the following two backend endpoints:
+
+      (1) GET /api/loads - now paginated + server-side filtered.
+          RESPONSE SHAPE CHANGED: was `[...]`, is now `{items, total, page, pageSize}`.
+          Query params (optional):
+            page (default 1), pageSize (default 50, max 200),
+            status, companyId, shipmentType, date (YYYY-MM-DD), q (free-text)
+          - Verify default call returns {items:[], total:0, page:1, pageSize:50} on empty
+          - Verify pagination: create ~55 loads, then page=1 pageSize=50 gives 50 items total=55,
+            page=2 pageSize=50 gives 5 items
+          - Verify pageSize cap: pageSize=500 should be capped at 200
+          - Verify filters:
+              * status=planning returns only planning loads
+              * companyId=<uuid> returns only that company's loads
+              * shipmentType=ic_nakliye returns only ic_nakliye loads
+              * date=YYYY-MM-DD matches loadDate exactly
+              * q='ABC' matches destCity/destCountry regex AND company name (case-insensitive)
+              * multiple filters combine (AND)
+          - Verify total reflects filter (not all loads)
+          - Verify UUID ids returned, no _id fields
+          - Verify sort: newest createdAt first
+
+      (2) GET /api/dashboard - now uses parallel countDocuments().
+          Response shape unchanged: {total, pending, planning, planned, delivered}
+          - Verify all keys present as integers
+          - Verify: pending == count(status=created)
+          - Verify: planning == count(status=planning)
+          - Verify: planned == count(status=planned) + count(status=in_transit)
+          - Verify: delivered == count(status=delivered) + count(status=shipped)
+          - Verify: total == sum of all statuses (including cancelled)
+
+      All other endpoints unchanged - no need to retest CRUD unless smoke-check.
+      Base URL: {NEXT_PUBLIC_BASE_URL}/api from /app/.env
+
       Test file: /app/backend_test.py (can be rerun anytime with: python3 /app/backend_test.py)
+
+  - agent: "testing"
+    message: |
+      ✅ RETESTING COMPLETE - PAGINATION & DASHBOARD UPDATES (14/14 tests passed)
+      
+      Retested the two updated backend endpoints as requested. Results:
+      
+      ## GET /api/loads - Pagination & Filtering ✅
+      All 11 pagination/filtering tests passed:
+      - Response shape correctly changed to {items, total, page, pageSize}
+      - Pagination works: 55 loads split correctly (page 1: 50 items, page 2: 5 items, page 3: 0 items)
+      - PageSize cap: 500 correctly capped at 200
+      - All filters work: status, companyId, shipmentType, date, q (free-text)
+      - Combined filters use AND logic
+      - Sort by createdAt DESC (newest first)
+      - Regex properly escaped (no crashes with special chars)
+      - Company name lookup in q filter works
+      - No _id fields (UUID only)
+      
+      Minor note: Turkish character case-insensitivity limitation - ?q=izmir (English i) 
+      doesn't match İzmir (Turkish İ) due to JavaScript regex locale rules. This is 
+      expected JS behavior. Exact matches work (?q=İzmir finds İzmir).
+      
+      ## GET /api/dashboard - Parallel countDocuments ✅
+      All 3 dashboard tests passed:
+      - Response structure correct: {total, pending, planning, planned, delivered}
+      - All values are integers
+      - Semantic mapping verified with 17 test loads:
+        * pending = count(created) ✅
+        * planning = count(planning) ✅
+        * planned = count(planned) + count(in_transit) ✅
+        * delivered = count(delivered) + count(shipped) ✅
+        * total = all loads including cancelled ✅
+      
+      Both endpoints working correctly. No critical issues found.
+      Test file: /app/backend_test_pagination.py

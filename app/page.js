@@ -60,7 +60,8 @@ const api = async (path, opts = {}) => {
 function App() {
   const [view, setView] = useState('dashboard') // dashboard | loads | companies | drivers | vehicles | detail
   const [selectedLoadId, setSelectedLoadId] = useState(null)
-  const [loads, setLoads] = useState([])
+  const [dashRecent, setDashRecent] = useState([])
+  const [hasAnyLoads, setHasAnyLoads] = useState(false)
   const [companies, setCompanies] = useState([])
   const [addresses, setAddresses] = useState([])
   const [drivers, setDrivers] = useState([])
@@ -69,10 +70,13 @@ function App() {
 
   const refreshAll = async () => {
     try {
-      const [l, c, a, d, v, dash] = await Promise.all([
-        api('loads'), api('companies'), api('addresses'), api('drivers'), api('vehicles'), api('dashboard')
+      const [recent, c, a, d, v, dash] = await Promise.all([
+        api('loads?page=1&pageSize=6'),
+        api('companies'), api('addresses'), api('drivers'), api('vehicles'), api('dashboard')
       ])
-      setLoads(l); setCompanies(c); setAddresses(a); setDrivers(d); setVehicles(v); setDashboard(dash)
+      setDashRecent(recent.items || [])
+      setHasAnyLoads((recent.total || 0) > 0)
+      setCompanies(c); setAddresses(a); setDrivers(d); setVehicles(v); setDashboard(dash)
     } catch (e) { toast.error(e.message) }
   }
 
@@ -86,7 +90,19 @@ function App() {
     } catch (e) { toast.error(e.message) }
   }
 
-  const selectedLoad = loads.find(l => l.id === selectedLoadId)
+  const [selectedLoad, setSelectedLoad] = useState(null)
+
+  useEffect(() => {
+    if (!selectedLoadId) { setSelectedLoad(null); return }
+    let alive = true
+    api(`loads/${selectedLoadId}`).then(d => { if (alive) setSelectedLoad(d) }).catch(e => toast.error(e.message))
+    return () => { alive = false }
+  }, [selectedLoadId])
+
+  const refreshSelected = async () => {
+    if (!selectedLoadId) return
+    try { const d = await api(`loads/${selectedLoadId}`); setSelectedLoad(d) } catch (e) { toast.error(e.message) }
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -103,7 +119,7 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {loads.length === 0 && companies.length === 0 && (
+            {!hasAnyLoads && companies.length === 0 && (
               <Button variant="outline" size="sm" onClick={seedData}>Örnek Veri Yükle</Button>
             )}
           </div>
@@ -134,16 +150,16 @@ function App() {
 
       <main className="flex-1 container mx-auto px-4 py-6">
         {view === 'dashboard' && (
-          <Dashboard dashboard={dashboard} loads={loads} companies={companies} onOpenLoad={(id) => { setSelectedLoadId(id); setView('detail') }} onGoto={setView} />
+          <Dashboard dashboard={dashboard} loads={dashRecent} companies={companies} onOpenLoad={(id) => { setSelectedLoadId(id); setView('detail') }} onGoto={setView} />
         )}
         {view === 'loads' && !selectedLoadId && (
-          <LoadsView loads={loads} companies={companies} addresses={addresses}
+          <LoadsView companies={companies} addresses={addresses}
             onOpen={(id) => { setSelectedLoadId(id); setView('detail') }}
-            onRefresh={refreshAll} />
+            onDataChanged={refreshAll} />
         )}
         {view === 'detail' && selectedLoad && (
           <LoadDetail load={selectedLoad} companies={companies} addresses={addresses} drivers={drivers} vehicles={vehicles}
-            onBack={() => { setView('loads'); setSelectedLoadId(null) }} onRefresh={refreshAll} />
+            onBack={() => { setView('loads'); setSelectedLoadId(null) }} onRefresh={() => { refreshAll(); refreshSelected() }} />
         )}
         {view === 'companies' && (
           <CompaniesView companies={companies} addresses={addresses} onRefresh={refreshAll} />
@@ -240,44 +256,78 @@ function Dashboard({ dashboard, loads, companies, onOpenLoad, onGoto }) {
 }
 
 // ============ LOADS LIST ============
-function LoadsView({ loads, companies, addresses, onOpen, onRefresh }) {
+function LoadsView({ companies, addresses, onOpen, onDataChanged }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('all')
   const [shipmentFilter, setShipmentFilter] = useState('all')
   const [openCreate, setOpenCreate] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, statusFilter, dateFilter, companyFilter, shipmentFilter, pageSize])
+
+  const fetchLoads = async () => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+      if (statusFilter !== 'all') params.set('status', statusFilter)
+      if (companyFilter !== 'all') params.set('companyId', companyFilter)
+      if (shipmentFilter !== 'all') params.set('shipmentType', shipmentFilter)
+      if (dateFilter) params.set('date', dateFilter)
+      if (debouncedSearch) params.set('q', debouncedSearch)
+      const data = await api('loads?' + params.toString())
+      setItems(data.items || [])
+      setTotal(data.total || 0)
+    } catch (e) { toast.error(e.message) } finally { setLoading(false) }
+  }
+
+  useEffect(() => { fetchLoads() }, [page, pageSize, statusFilter, companyFilter, shipmentFilter, dateFilter, debouncedSearch])
 
   const companyName = (id) => companies.find(c => c.id === id)?.name || '-'
   const addressCity = (id) => addresses.find(a => a.id === id)?.city || '-'
 
-  const filtered = useMemo(() => {
-    return loads.filter(l => {
-      if (statusFilter !== 'all' && l.status !== statusFilter) return false
-      if (companyFilter !== 'all' && l.companyId !== companyFilter) return false
-      if (shipmentFilter !== 'all' && l.shipmentType !== shipmentFilter) return false
-      if (dateFilter && l.loadDate !== dateFilter) return false
-      if (search) {
-        const s = search.toLowerCase()
-        const cn = companyName(l.companyId).toLowerCase()
-        if (!cn.includes(s) && !l.destCity?.toLowerCase().includes(s) && !l.destCountry?.toLowerCase().includes(s)) return false
-      }
-      return true
-    })
-  }, [loads, search, statusFilter, dateFilter, companyFilter, shipmentFilter, companies])
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const to = Math.min(total, page * pageSize)
+
+  const goPage = (p) => setPage(Math.min(totalPages, Math.max(1, p)))
+
+  const pageNumbers = useMemo(() => {
+    // Compact pagination: first, last, current +- 1
+    const set = new Set([1, totalPages, page, page - 1, page + 1])
+    return Array.from(set).filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+  }, [page, totalPages])
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold">Yükler</h2>
-          <p className="text-slate-500 text-sm">{filtered.length} yük gösteriliyor</p>
+          <p className="text-slate-500 text-sm">
+            {total === 0 ? '0 yük' : `${from}-${to} / ${total} yük`}
+            {loading && <span className="ml-2 text-blue-600">Yükleniyor...</span>}
+          </p>
         </div>
         <Dialog open={openCreate} onOpenChange={setOpenCreate}>
           <DialogTrigger asChild>
             <Button className="gap-2"><Plus className="w-4 h-4" />Yeni Yük</Button>
           </DialogTrigger>
-          <LoadCreateDialog companies={companies} addresses={addresses} onClose={() => setOpenCreate(false)} onCreated={() => { setOpenCreate(false); onRefresh() }} />
+          <LoadCreateDialog companies={companies} addresses={addresses} onClose={() => setOpenCreate(false)} onCreated={() => { setOpenCreate(false); fetchLoads(); onDataChanged && onDataChanged() }} />
         </Dialog>
       </div>
 
@@ -318,10 +368,10 @@ function LoadsView({ loads, companies, addresses, onOpen, onRefresh }) {
       {/* Table (desktop) / Cards (mobile) */}
       <Card>
         <CardContent className="p-0">
-          {filtered.length === 0 ? (
+          {items.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
               <Package className="w-12 h-12 mx-auto mb-2 text-slate-300" />
-              <p>Yük bulunamadı</p>
+              <p>{loading ? 'Yükleniyor...' : 'Yük bulunamadı'}</p>
             </div>
           ) : (
             <>
@@ -343,7 +393,7 @@ function LoadsView({ loads, companies, addresses, onOpen, onRefresh }) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filtered.map(l => (
+                    {items.map(l => (
                       <tr key={l.id} onClick={() => onOpen(l.id)} className="hover:bg-slate-50 cursor-pointer">
                         <td className="px-3 py-2 whitespace-nowrap">{l.loadDate}</td>
                         <td className="px-3 py-2 font-medium">{companyName(l.companyId)}</td>
@@ -362,7 +412,7 @@ function LoadsView({ loads, companies, addresses, onOpen, onRefresh }) {
               </div>
               {/* Mobile cards */}
               <div className="md:hidden divide-y divide-slate-100">
-                {filtered.map(l => (
+                {items.map(l => (
                   <div key={l.id} onClick={() => onOpen(l.id)} className="p-4 hover:bg-slate-50 cursor-pointer">
                     <div className="flex justify-between items-start mb-1">
                       <p className="font-semibold">{companyName(l.companyId)}</p>
@@ -377,6 +427,42 @@ function LoadsView({ loads, companies, addresses, onOpen, onRefresh }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Pagination */}
+      {total > 0 && (
+        <Card>
+          <CardContent className="py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <span>Sayfa başına:</span>
+                <Select value={String(pageSize)} onValueChange={v => setPageSize(parseInt(v, 10))}>
+                  <SelectTrigger className="w-20 h-8"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="200">200</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" disabled={page === 1 || loading} onClick={() => goPage(page - 1)}>Önceki</Button>
+                {pageNumbers.map((n, i) => {
+                  const prev = pageNumbers[i - 1]
+                  const gap = prev && n - prev > 1
+                  return (
+                    <span key={n} className="flex items-center">
+                      {gap && <span className="px-1 text-slate-400">…</span>}
+                      <Button variant={n === page ? 'default' : 'outline'} size="sm" onClick={() => goPage(n)} disabled={loading} className="min-w-[36px]">{n}</Button>
+                    </span>
+                  )
+                })}
+                <Button variant="outline" size="sm" disabled={page >= totalPages || loading} onClick={() => goPage(page + 1)}>Sonraki</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
