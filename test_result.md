@@ -422,6 +422,93 @@ backend:
           endpoint MUST get 403.
       - working: true
         agent: "testing"
+
+  - task: "Vehicle types standardization + tractor/trailer planning validation"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Vehicle types are now standardized backend keys with Turkish labels shown in UI.
+          Allowed keys: tractor, trailer, truck, van, panel_van, minibus, bus, pickup, other.
+          POST /api/vehicles and PUT /api/vehicles/:id now VALIDATE the `type` field:
+            - Value must be one of the 9 standard keys OR a recognized Turkish alias
+              (aliases table maps: 'çeker/tir/tır' -> tractor, 'dorse/römork' -> trailer,
+              'kamyon' -> truck, 'kamyonet' -> van, 'panelvan/panel van' -> panel_van,
+              'minibüs/minibus' -> minibus, 'otobüs/otobus' -> bus, 'pikap' -> pickup,
+              'diğer/diger' -> other). Case-insensitive.
+            - Unknown values (e.g. "UFO") -> 400 "Geçersiz araç tipi".
+          Migration: on /auth/init and /auth/login calls, ensureVehicleTypeMigration() runs
+          and rewrites any legacy Turkish stored values to standard keys. Verified via
+          existing seed data ('Tır' migrated to 'tractor', 'Kamyonet' to 'van').
+          Existing vehicle CRUD (list, GET, DELETE) unchanged in behavior.
+
+          POST /api/loads/:id/plan now supports a `dorseId` field with these rules:
+            - If the selected `vehicleId` refers to a vehicle with type='tractor',
+              `dorseId` is REQUIRED. Missing -> 400 with
+              "Çeker için dorse seçimi zorunludur".
+            - `dorseId` (when provided) must reference an existing vehicle with type='trailer'.
+              Otherwise -> 400 "Dorse alanında yalnızca dorse tipinde araç seçilebilir".
+            - If the selected vehicle is NOT tractor, any provided dorseId is IGNORED
+              and stored as null.
+            - Load documents now carry `dorseId` on plan. Existing loads without dorseId are
+              unaffected (field will be null).
+          Frontend Plan dialog conditionally renders a Dorse Select when the chosen
+          vehicle is tractor. Vehicle Select on the plan dialog excludes trailers
+          (dorses are only used via the dedicated Dorse field).
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL TESTS PASSED (21/21 tests)
+          
+          Comprehensive testing of vehicle type standardization and tractor/trailer planning completed successfully.
+          
+          **PART A: Vehicle Type Standardization (12/12 tests passed)**
+          
+          1. ✅ POST vehicle type='tractor' → 200, stored as 'tractor'
+          2. ✅ POST vehicle type='trailer' → 200, stored as 'trailer'
+          3. ✅ POST vehicle type='UFO' → 400 with "Geçersiz araç tipi"
+          4. ✅ POST vehicle type='Tır' (Turkish) → 200, normalized to 'tractor'
+          5. ✅ POST vehicle type='Dorse' (Turkish) → 200, normalized to 'trailer'
+          6. ✅ POST vehicle type='kamyon' (Turkish) → 200, normalized to 'truck'
+          7. ✅ POST vehicle type='' (empty) → 400 (strict validation)
+          8. ✅ POST vehicle without type field → 400
+          9. ✅ PUT vehicle type='UFO' → 400 with "Geçersiz araç tipi"
+          10. ✅ PUT vehicle type='Kamyonet' (Turkish) → 200, normalized to 'van'
+          11. ✅ Migration check: All 8 vehicles in DB have standard types (no legacy Turkish strings)
+          12. ✅ Non-arac_planlama roles (yukler, depo) get 403 on POST /vehicles (regression check)
+          
+          **PART B: Load Planning with Dorse (9/9 tests passed)**
+          
+          Setup: Created truck, tractor, trailer, driver, company, address, and ic_nakliye load
+          
+          1. ✅ Plan with truck (no dorseId) → 200, dorseId=null, status='planned'
+             - StatusHistory correctly appended with user='Araç Planlama Demo'
+          2. ✅ Plan with tractor (no dorseId) → 400 with exact message "Çeker için dorse seçimi zorunludur"
+          3. ✅ Plan with tractor + truck as dorseId → 400 with exact message "Dorse alanında yalnızca dorse tipinde araç seçilebilir"
+          4. ✅ Plan with tractor + trailer → 200, dorseId=trailerId, vehicleId=tractorId
+          5. ✅ Plan with tractor + invalid dorseId → 400 with "Seçilen dorse bulunamadı"
+          6. ✅ Re-plan with truck + dorseId → 200, dorseId ignored and stored as null (correct behavior)
+          7. ✅ Plan with invalid vehicleId → 400 with "Seçilen araç bulunamadı"
+          8. ✅ Load status is 'planned' after successful plan call
+          9. ✅ StatusHistory appends new 'planned' entry with current user's name on each plan call
+          
+          **PART C: Data Preservation (verified)**
+          
+          - Initial counts: vehicles=3, drivers=2, loads=3, companies=2, addresses=3
+          - Created 8 test vehicles, 1 driver, 1 load, 1 company, 1 address during tests
+          - All test data cleaned up successfully
+          - Final counts match initial counts exactly ✅
+          
+          All vehicle type validation, Turkish alias normalization, migration, and tractor/trailer planning logic working correctly. No critical issues found.
+          
+          Test file: /app/backend_test_vehicle_types.py
+
         comment: |
           ✅ USER MANAGEMENT CRUD TESTED (40/40 tests passed)
           
@@ -638,11 +725,7 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Authentication (login/logout/me/init) + demo user auto-provisioning + Admin bootstrap + password hashing"
-    - "Role-based authorization for all backend endpoints (with Admin bypass)"
-    - "User management CRUD endpoints (admin only)"
-    - "Self password change endpoint"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1019,3 +1102,92 @@ agent_communication:
       
       Screenshots saved: 01_login_page.png, 02_admin_dashboard.png, 03_admin_soforler_page.png,
       04_admin_all_tabs_tested.png, 05_planlama_soforler_page.png, 06_yukler_tabs.png
+  - agent: "main"
+    message: |
+      VEHICLE TYPES + TRACTOR/TRAILER PLANNING - Please test these two areas.
+
+      Base URL: {NEXT_PUBLIC_BASE_URL}/api. Login as admin (admin@yuktakip.local / admin123)
+      or planlama / 1234 depending on which endpoint requires which role.
+
+      ## (A) Vehicle Type Standardization
+      New allowed backend keys: tractor, trailer, truck, van, panel_van, minibus, bus,
+      pickup, other.
+
+      Tests:
+      1) POST /api/vehicles with type='tractor', plate='TEST-1' as arac_planlama -> 200.
+         Verify stored type is exactly 'tractor'.
+      2) POST /api/vehicles with type='trailer', plate='TEST-2' -> 200.
+      3) POST /api/vehicles with type='UFO' -> 400 "Geçersiz araç tipi".
+      4) POST /api/vehicles with type='Tır' -> 200, stored type normalized to 'tractor'.
+      5) POST /api/vehicles with type='Dorse' -> 200, normalized to 'trailer'.
+      6) POST /api/vehicles with type='kamyon' -> 200, normalized to 'truck'.
+      7) POST /api/vehicles with type='' (empty) -> 400 (strict).
+      8) PUT /api/vehicles/:id with type='UFO' -> 400.
+      9) PUT with type='Kamyonet' -> 200, stored as 'van'.
+      10) Migration check: on /auth/init or /auth/login, any pre-existing vehicle
+          records with legacy Turkish types should already be normalized to standard
+          keys. Currently ALL vehicles in the DB should have type ∈ standard set.
+          Verify by listing /api/vehicles and asserting each item.type is one of the 9 keys.
+      11) Existing vehicle CRUD (list/get/delete) still works. Non-arac_planlama roles
+          still get 403 on write endpoints.
+
+      ## (B) Load Planning with Dorse
+      POST /api/loads/:id/plan now takes optional `dorseId`.
+
+      Tests:
+      1) Setup: create a truck ('truck'), a tractor ('tractor'), and a trailer ('trailer').
+         Create a driver. Create an ic_nakliye load.
+      2) Plan with vehicleId=<truckId>, no dorseId -> 200. Load's dorseId should be null.
+      3) Plan with vehicleId=<tractorId>, no dorseId -> 400 "Çeker için dorse seçimi zorunludur".
+      4) Plan with vehicleId=<tractorId>, dorseId=<truckId> -> 400
+         "Dorse alanında yalnızca dorse tipinde araç seçilebilir".
+      5) Plan with vehicleId=<tractorId>, dorseId=<trailerId> -> 200. Load's dorseId
+         stores the trailer id.
+      6) Plan with vehicleId=<tractorId>, dorseId='nonexistent' -> 400 "Seçilen dorse bulunamadı".
+      7) Re-plan (call /plan again) with vehicleId=<truckId>, dorseId=<trailerId>
+         (i.e. non-tractor but with dorseId) -> 200. Server must IGNORE the dorseId and
+         store null.
+      8) Plan with vehicleId='nonexistent' -> 400 "Seçilen araç bulunamadı".
+      9) Verify load status is 'planned' after any successful plan call and
+         statusHistory has a new entry with the current user's name.
+
+      ## (C) Data preservation
+      Before running: count docs in loads/vehicles/drivers/companies/addresses. After
+      running: recount minus any test docs you POSTed and cleaned up with DELETE.
+      Existing data must remain intact.
+
+      Do NOT call POST /api/seed.
+
+  - agent: "testing"
+    message: |
+      ✅ VEHICLE TYPES + TRACTOR/TRAILER PLANNING TESTING COMPLETE (21/21 tests passed)
+      
+      Comprehensive backend testing completed successfully. All vehicle type standardization 
+      and tractor/trailer planning features working correctly.
+      
+      ## Test Coverage:
+      
+      ### Part A: Vehicle Type Standardization (12 tests) ✅
+      - Standard types (tractor, trailer, truck, etc.) validated correctly
+      - Turkish aliases (Tır→tractor, Dorse→trailer, kamyon→truck, Kamyonet→van) normalized correctly
+      - Invalid types (UFO, empty string, missing field) rejected with 400
+      - Migration verified: all 8 vehicles in DB have standard types
+      - RBAC regression check: non-arac_planlama roles get 403 on vehicle writes
+      
+      ### Part B: Load Planning with Dorse (9 tests) ✅
+      - Truck planning (no dorseId): works correctly, dorseId stored as null
+      - Tractor without dorseId: correctly rejected with "Çeker için dorse seçimi zorunludur"
+      - Tractor with non-trailer dorseId: correctly rejected with "Dorse alanında yalnızca dorse tipinde araç seçilebilir"
+      - Tractor with trailer: works correctly, both vehicleId and dorseId stored
+      - Invalid dorseId/vehicleId: correctly rejected with appropriate error messages
+      - Non-tractor with dorseId: dorseId correctly ignored and stored as null
+      - StatusHistory: correctly appends 'planned' entry with user name on each plan call
+      
+      ### Part C: Data Preservation ✅
+      - All initial data preserved (vehicles=3, drivers=2, loads=3, companies=2, addresses=3)
+      - Test data created and cleaned up successfully
+      - Final counts match initial counts exactly
+      
+      No critical issues found. All features working as specified.
+      
+      Test file: /app/backend_test_vehicle_types.py

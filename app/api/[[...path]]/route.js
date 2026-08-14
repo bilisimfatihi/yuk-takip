@@ -39,6 +39,49 @@ const STATUS_LABELS = {
   cancelled: 'İptal',
 }
 
+// --------- VEHICLE TYPES ---------
+const VEHICLE_TYPES = ['tractor', 'trailer', 'truck', 'van', 'panel_van', 'minibus', 'bus', 'pickup', 'other']
+const VEHICLE_TYPE_ALIASES = {
+  // Turkish/legacy labels -> standard keys
+  'çeker': 'tractor',
+  'ceker': 'tractor',
+  'tır': 'tractor',
+  'tir': 'tractor',
+  'dorse': 'trailer',
+  'römork': 'trailer',
+  'romork': 'trailer',
+  'kamyon': 'truck',
+  'kamyonet': 'van',
+  'panelvan': 'panel_van',
+  'panel van': 'panel_van',
+  'minibüs': 'minibus',
+  'minibus': 'minibus',
+  'otobüs': 'bus',
+  'otobus': 'bus',
+  'pikap': 'pickup',
+  'diğer': 'other',
+  'diger': 'other',
+  '': 'other',
+}
+function normalizeVehicleType(t, { strict = false } = {}) {
+  if (t === undefined || t === null || t === '') return strict ? null : 'other'
+  const s = String(t).trim()
+  if (VEHICLE_TYPES.includes(s)) return s
+  const alias = VEHICLE_TYPE_ALIASES[s.toLowerCase()]
+  if (alias) return alias
+  return strict ? null : 'other'
+}
+
+async function ensureVehicleTypeMigration(db) {
+  const list = await db.collection('vehicles').find({}).toArray()
+  for (const v of list) {
+    const nt = normalizeVehicleType(v.type)
+    if (nt !== v.type) {
+      await db.collection('vehicles').updateOne({ id: v.id }, { $set: { type: nt } })
+    }
+  }
+}
+
 // --------- ROLES ---------
 const ROLES = {
   ADMIN: 'admin',
@@ -233,6 +276,7 @@ async function handler(request, { params }) {
     // -------- AUTH ROUTES --------
     if (path === 'auth/init' && (method === 'POST' || method === 'GET')) {
       await ensureDemoUsers(db)
+      await ensureVehicleTypeMigration(db)
       return json({
         ok: true,
         demoUsers: DEMO_USERS.map(u => ({ username: u.username, password: u.password, name: u.name, roles: u.roles })),
@@ -241,6 +285,7 @@ async function handler(request, { params }) {
 
     if (path === 'auth/login' && method === 'POST') {
       await ensureDemoUsers(db)
+      await ensureVehicleTypeMigration(db)
       const body = await request.json()
       const login = (body?.username || body?.email || body?.login || '').trim()
       const password = body?.password
@@ -505,9 +550,11 @@ async function handler(request, { params }) {
     if (path === 'vehicles' && method === 'POST') {
       const body = await request.json()
       if (!body.plate) return err('Plaka zorunlu')
+      const type = normalizeVehicleType(body.type, { strict: true })
+      if (!type) return err('Geçersiz araç tipi', 400)
       const doc = {
         id: uuidv4(),
-        type: body.type || '',
+        type,
         plate: body.plate,
         active: body.active !== false,
         createdAt: new Date().toISOString(),
@@ -520,6 +567,11 @@ async function handler(request, { params }) {
       const body = await request.json()
       const upd = { ...body }
       delete upd.id
+      if (upd.type !== undefined) {
+        const type = normalizeVehicleType(upd.type, { strict: true })
+        if (!type) return err('Geçersiz araç tipi', 400)
+        upd.type = type
+      }
       await db.collection('vehicles').updateOne({ id }, { $set: upd })
       const d = await db.collection('vehicles').findOne({ id })
       return json(clean(d))
@@ -627,6 +679,25 @@ async function handler(request, { params }) {
       const now = new Date().toISOString()
       const load = await db.collection('loads').findOne({ id })
       if (!load) return err('Yük yok', 404)
+
+      // Validate: if selected vehicle is tractor, dorseId is required and must be a trailer
+      let dorseId = body.dorseId || null
+      if (body.vehicleId) {
+        const vehicle = await db.collection('vehicles').findOne({ id: body.vehicleId })
+        if (!vehicle) return err('Seçilen araç bulunamadı', 400)
+        if (vehicle.type === 'tractor') {
+          if (!dorseId) return err('Çeker için dorse seçimi zorunludur', 400)
+          const dorse = await db.collection('vehicles').findOne({ id: dorseId })
+          if (!dorse) return err('Seçilen dorse bulunamadı', 400)
+          if (dorse.type !== 'trailer') return err('Dorse alanında yalnızca dorse tipinde araç seçilebilir', 400)
+        } else {
+          // Non-tractor vehicles should not carry a dorseId
+          dorseId = null
+        }
+      } else {
+        dorseId = null
+      }
+
       const newHistory = [
         ...(load.statusHistory || []),
         { status: 'planned', at: now, user: currentUser.name || currentUser.username, note: 'Araç/şoför planlandı' },
@@ -634,6 +705,7 @@ async function handler(request, { params }) {
       await db.collection('loads').updateOne({ id }, { $set: {
         driverId: body.driverId || null,
         vehicleId: body.vehicleId || null,
+        dorseId,
         plannedDateTime: body.plannedDateTime || null,
         status: 'planned',
         statusHistory: newHistory,
@@ -716,8 +788,8 @@ async function handler(request, { params }) {
       const d2 = { id: uuidv4(), name: 'Ali Şahin', phone: '905339876543', active: true, createdAt: new Date().toISOString() }
       await db.collection('drivers').insertMany([d1, d2])
 
-      const v1 = { id: uuidv4(), type: 'Kamyonet', plate: '34 ABC 123', active: true, createdAt: new Date().toISOString() }
-      const v2 = { id: uuidv4(), type: 'Tır', plate: '06 XYZ 789', active: true, createdAt: new Date().toISOString() }
+      const v1 = { id: uuidv4(), type: 'van', plate: '34 ABC 123', active: true, createdAt: new Date().toISOString() }
+      const v2 = { id: uuidv4(), type: 'tractor', plate: '06 XYZ 789', active: true, createdAt: new Date().toISOString() }
       await db.collection('vehicles').insertMany([v1, v2])
 
       return json({ ok: true, message: 'Örnek veriler yüklendi' })

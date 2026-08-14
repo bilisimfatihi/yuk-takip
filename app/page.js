@@ -84,6 +84,21 @@ const hasRole = (user, r) => user && Array.isArray(user.roles) && user.roles.inc
 const hasAny = (user, arr) => arr.some(r => hasRole(user, r))
 const isAdmin = (user) => hasRole(user, ROLE.ADMIN)
 
+// Vehicle type mapping (backend key -> Turkish label)
+const VEHICLE_TYPE_LABELS = {
+  tractor: 'Çeker',
+  trailer: 'Dorse',
+  truck: 'Kamyon',
+  van: 'Kamyonet',
+  panel_van: 'Panelvan',
+  minibus: 'Minibüs',
+  bus: 'Otobüs',
+  pickup: 'Pikap',
+  other: 'Diğer',
+}
+const VEHICLE_TYPE_OPTIONS = Object.entries(VEHICLE_TYPE_LABELS)
+const vehicleTypeLabel = (t) => VEHICLE_TYPE_LABELS[t] || t || '-'
+
 function App() {
   const [user, setUser] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
@@ -940,18 +955,31 @@ function LoadCreateDialog({ companies, addresses, onClose, onCreated }) {
 // ============ LOAD DETAIL ============
 function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBack, onRefresh }) {
   const [planOpen, setPlanOpen] = useState(false)
-  const [plan, setPlan] = useState({ driverId: load.driverId || '', vehicleId: load.vehicleId || '', plannedDateTime: load.plannedDateTime || '' })
+  const [plan, setPlan] = useState({ driverId: load.driverId || '', vehicleId: load.vehicleId || '', dorseId: load.dorseId || '', plannedDateTime: load.plannedDateTime || '' })
   const company = companies.find(c => c.id === load.companyId)
   const address = addresses.find(a => a.id === load.addressId)
   const driver = drivers.find(d => d.id === load.driverId)
   const vehicle = vehicles.find(v => v.id === load.vehicleId)
+  const dorse = vehicles.find(v => v.id === load.dorseId)
   const isIcNakliye = load.shipmentType === 'ic_nakliye'
 
   const isYS = hasRole(user, ROLE.YS)
   const isAP = hasRole(user, ROLE.AP)
   const isDP = hasRole(user, ROLE.DP)
+  const admin = isAdmin(user)
+
+  const selectedVehicle = vehicles.find(v => v.id === plan.vehicleId)
+  const needsDorse = selectedVehicle?.type === 'tractor'
+  const trailerOptions = vehicles.filter(v => v.active && v.type === 'trailer')
 
   const savePlan = async () => {
+    // Frontend validation: tractor requires dorse
+    if (plan.vehicleId) {
+      const sv = vehicles.find(v => v.id === plan.vehicleId)
+      if (sv?.type === 'tractor' && !plan.dorseId) {
+        return toast.error('Çeker için dorse seçimi zorunludur')
+      }
+    }
     try {
       await api(`loads/${load.id}/plan`, { method: 'POST', body: JSON.stringify(plan) })
       toast.success('Planlama kaydedildi')
@@ -993,7 +1021,8 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBac
       load.dimensions && `Ölçüler: ${load.dimensions}`,
       (load.destCity || load.destCountry) && `Gidiş: ${load.destCity} ${load.destCountry}`.trim(),
       load.plannedDateTime && `Planlanan Tarih/Saat: ${load.plannedDateTime.replace('T', ' ')}`,
-      vehicle && `Araç: ${vehicle.type} ${vehicle.plate}`,
+      vehicle && `Araç: ${vehicleTypeLabel(vehicle.type)} ${vehicle.plate}`,
+      dorse && `Dorse: ${dorse.plate}`,
       load.note && `Not: ${load.note}`,
     ].filter(Boolean)
     return lines.join('\n')
@@ -1087,14 +1116,36 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBac
                           </Select>
                         </div>
                         <div>
-                          <Label>Araç</Label>
-                          <Select value={plan.vehicleId} onValueChange={v => setPlan({ ...plan, vehicleId: v })}>
+                          <Label>Araç {needsDorse ? '(Çeker)' : ''}</Label>
+                          <Select value={plan.vehicleId} onValueChange={v => {
+                            // If new vehicle isn't a tractor, clear any previously selected dorse
+                            const nv = vehicles.find(x => x.id === v)
+                            setPlan(prev => ({ ...prev, vehicleId: v, dorseId: nv?.type === 'tractor' ? prev.dorseId : '' }))
+                          }}>
                             <SelectTrigger><SelectValue placeholder="Araç seçin" /></SelectTrigger>
                             <SelectContent>
-                              {vehicles.filter(v => v.active).map(v => <SelectItem key={v.id} value={v.id}>{v.type} · {v.plate}</SelectItem>)}
+                              {vehicles.filter(v => v.active && v.type !== 'trailer').map(v => (
+                                <SelectItem key={v.id} value={v.id}>{vehicleTypeLabel(v.type)} · {v.plate}</SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </div>
+                        {needsDorse && (
+                          <div>
+                            <Label className="text-amber-700">Dorse *</Label>
+                            <Select value={plan.dorseId} onValueChange={v => setPlan({ ...plan, dorseId: v })}>
+                              <SelectTrigger><SelectValue placeholder="Dorse seçin (zorunlu)" /></SelectTrigger>
+                              <SelectContent>
+                                {trailerOptions.length === 0 ? (
+                                  <div className="px-2 py-1.5 text-xs text-slate-500">Sistemde aktif dorse yok. Araçlar ekranından ekleyin.</div>
+                                ) : trailerOptions.map(v => (
+                                  <SelectItem key={v.id} value={v.id}>{v.plate}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-slate-500 mt-1">Çeker seçildiği için dorse zorunludur.</p>
+                          </div>
+                        )}
                         <div>
                           <Label>Planlanan Tarih/Saat</Label>
                           <Input type="datetime-local" value={plan.plannedDateTime} onChange={e => setPlan({ ...plan, plannedDateTime: e.target.value })} />
@@ -1110,7 +1161,8 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBac
               </CardHeader>
               <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                 <Info label="Şoför" value={driver ? driver.name : 'Atanmadı'} sub={driver?.phone} />
-                <Info label="Araç" value={vehicle ? `${vehicle.type} · ${vehicle.plate}` : 'Atanmadı'} />
+                <Info label="Araç" value={vehicle ? `${vehicleTypeLabel(vehicle.type)} · ${vehicle.plate}` : 'Atanmadı'} />
+                {dorse && <Info label="Dorse" value={dorse.plate} />}
                 <Info label="Planlanan" value={load.plannedDateTime ? load.plannedDateTime.replace('T', ' ') : '-'} />
               </CardContent>
               {driver && isAP && (
@@ -1411,21 +1463,38 @@ function DriverForm({ driver, onClose, onSaved }) {
 function VehiclesView({ vehicles, onRefresh }) {
   const [open, setOpen] = useState(false)
   const [edit, setEdit] = useState(null)
+  const [typeFilter, setTypeFilter] = useState('all')
   const del = async (id) => {
     if (!confirm('Araç silinsin mi?')) return
     try { await api(`vehicles/${id}`, { method: 'DELETE' }); toast.success('Silindi'); onRefresh() } catch (e) { toast.error(e.message) }
   }
+  const filtered = typeFilter === 'all' ? vehicles : vehicles.filter(v => v.type === typeFilter)
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-2xl font-bold">Araçlar</h2><p className="text-slate-500 text-sm">{vehicles.length} araç</p></div>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div><h2 className="text-2xl font-bold">Araçlar</h2><p className="text-slate-500 text-sm">{filtered.length} / {vehicles.length} araç</p></div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button className="gap-2"><Plus className="w-4 h-4" />Yeni Araç</Button></DialogTrigger>
           <VehicleForm onClose={() => setOpen(false)} onSaved={() => { setOpen(false); onRefresh() }} />
         </Dialog>
       </div>
+      <Card>
+        <CardContent className="pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div className="md:col-span-1">
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger><SelectValue placeholder="Araç Tipi" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tümü</SelectItem>
+                  {VEHICLE_TYPE_OPTIONS.map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {vehicles.map(v => (
+        {filtered.map(v => (
           <Card key={v.id}>
             <CardContent className="pt-4">
               <div className="flex items-center justify-between">
@@ -1433,7 +1502,7 @@ function VehiclesView({ vehicles, onRefresh }) {
                   <div className="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-lg flex items-center justify-center flex-shrink-0"><Truck className="w-5 h-5" /></div>
                   <div className="min-w-0">
                     <p className="font-medium">{v.plate}</p>
-                    <p className="text-xs text-slate-500">{v.type}</p>
+                    <p className="text-xs text-slate-500">{vehicleTypeLabel(v.type)}</p>
                   </div>
                 </div>
                 <div className="flex gap-1">
@@ -1445,6 +1514,12 @@ function VehiclesView({ vehicles, onRefresh }) {
             </CardContent>
           </Card>
         ))}
+        {filtered.length === 0 && (
+          <div className="col-span-full text-center py-10 text-slate-500">
+            <Truck className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+            <p>Bu filtreye uygun araç yok</p>
+          </div>
+        )}
       </div>
       {edit && <Dialog open={!!edit} onOpenChange={() => setEdit(null)}><VehicleForm vehicle={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onRefresh() }} /></Dialog>}
     </div>
@@ -1452,9 +1527,10 @@ function VehiclesView({ vehicles, onRefresh }) {
 }
 
 function VehicleForm({ vehicle, onClose, onSaved }) {
-  const [f, setF] = useState({ type: vehicle?.type || '', plate: vehicle?.plate || '', active: vehicle?.active !== false })
+  const [f, setF] = useState({ type: vehicle?.type || 'truck', plate: vehicle?.plate || '', active: vehicle?.active !== false })
   const save = async () => {
     if (!f.plate) return toast.error('Plaka zorunlu')
+    if (!f.type) return toast.error('Araç tipi zorunlu')
     try {
       if (vehicle) await api(`vehicles/${vehicle.id}`, { method: 'PUT', body: JSON.stringify(f) })
       else await api('vehicles', { method: 'POST', body: JSON.stringify(f) })
@@ -1465,7 +1541,15 @@ function VehicleForm({ vehicle, onClose, onSaved }) {
     <DialogContent>
       <DialogHeader><DialogTitle>{vehicle ? 'Araç Düzenle' : 'Yeni Araç'}</DialogTitle></DialogHeader>
       <div className="space-y-3">
-        <div><Label>Araç Tipi</Label><Input value={f.type} onChange={e => setF({ ...f, type: e.target.value })} placeholder="örn. Kamyonet, Tır" /></div>
+        <div>
+          <Label>Araç Tipi *</Label>
+          <Select value={f.type} onValueChange={v => setF({ ...f, type: v })}>
+            <SelectTrigger><SelectValue placeholder="Araç tipi seçin" /></SelectTrigger>
+            <SelectContent>
+              {VEHICLE_TYPE_OPTIONS.map(([k, l]) => <SelectItem key={k} value={k}>{l}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
         <div><Label>Plaka *</Label><Input value={f.plate} onChange={e => setF({ ...f, plate: e.target.value })} placeholder="34 ABC 123" /></div>
         <div className="flex items-center gap-2"><Switch checked={f.active} onCheckedChange={v => setF({ ...f, active: v })} /><Label>Aktif</Label></div>
       </div>
