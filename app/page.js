@@ -158,7 +158,7 @@ function LoginPage({ onLogin }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row max-w-[1360px] mx-auto w-full">
       {/* LEFT PANEL — Product intro */}
       <div className="lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-blue-50 via-slate-50 to-indigo-50 flex flex-col justify-between p-6 sm:p-10 lg:p-14">
         <div>
