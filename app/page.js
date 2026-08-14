@@ -15,7 +15,8 @@ import { toast } from 'sonner'
 import {
   Package, Truck, Building2, MapPin, User, Users, Plus, Search, Filter,
   Send, CheckCircle2, Clock, AlertCircle, PackageCheck, LayoutDashboard,
-  Trash2, Edit, ArrowLeft, Phone, Calendar, MessageCircle, X
+  Trash2, Edit, ArrowLeft, ArrowRight, Phone, Calendar, MessageCircle, X,
+  Lock, Eye, EyeOff
 } from 'lucide-react'
 
 const SHIPMENT_TYPES = {
@@ -117,6 +118,8 @@ function App() {
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [remember, setRemember] = useState(true)
   const [demoUsers, setDemoUsers] = useState([])
   const [loading, setLoading] = useState(false)
 
@@ -124,6 +127,7 @@ function LoginPage({ onLogin }) {
     api('auth/init', { method: 'POST' }).then(d => setDemoUsers(d.demoUsers || [])).catch(() => {})
   }, [])
 
+  // UNCHANGED authentication behavior
   const doLogin = async (u, p) => {
     setLoading(true)
     try {
@@ -133,67 +137,237 @@ function LoginPage({ onLogin }) {
     } catch (e) { toast.error(e.message) } finally { setLoading(false) }
   }
 
+  const features = [
+    { icon: Package, title: 'Yük Takibi', sub: 'Anlık Takip', color: 'from-blue-500 to-blue-600', bg: 'bg-blue-50', tone: 'text-blue-600' },
+    { icon: Truck, title: 'Araç Yönetimi', sub: 'Etkin Planlama', color: 'from-indigo-500 to-indigo-600', bg: 'bg-indigo-50', tone: 'text-indigo-600' },
+    { icon: Building2, title: 'Depo İşlemleri', sub: 'Hızlı Operasyon', color: 'from-sky-500 to-sky-600', bg: 'bg-sky-50', tone: 'text-sky-600' },
+    { icon: LayoutDashboard, title: 'Raporlama', sub: 'Detaylı Analiz', color: 'from-cyan-500 to-cyan-600', bg: 'bg-cyan-50', tone: 'text-cyan-600' },
+  ]
+
+  const roleMeta = {
+    yuk_sorumlusu: { I: User, tone: 'text-blue-600', bg: 'bg-blue-50' },
+    arac_planlama: { I: Truck, tone: 'text-indigo-600', bg: 'bg-indigo-50' },
+    depocu: { I: Building2, tone: 'text-amber-600', bg: 'bg-amber-50' },
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-6">
-          <div className="w-14 h-14 mx-auto rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg">
-            <Truck className="w-7 h-7" />
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row">
+      {/* LEFT PANEL — Product intro */}
+      <div className="lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-blue-50 via-slate-50 to-indigo-50 flex flex-col justify-between p-6 sm:p-10 lg:p-14">
+        <div>
+          {/* Brand */}
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md">
+              <Truck className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xl font-bold tracking-tight text-slate-900 leading-none">YÜK<span className="text-blue-600">TAKİP</span></p>
+              <p className="text-[11px] uppercase tracking-wider text-slate-500 mt-1">Lojistik Operasyon Paneli</p>
+            </div>
           </div>
-          <h1 className="text-2xl font-bold mt-3">YükTakip</h1>
-          <p className="text-slate-500 text-sm">Lojistik Operasyon Paneli</p>
+
+          {/* Hero */}
+          <div className="mt-10 lg:mt-14 max-w-lg">
+            <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 leading-tight">
+              Lojistik operasyonlarınızı<br />tek platformda yönetin
+            </h1>
+            <p className="mt-4 text-slate-600 leading-relaxed">
+              Yüklerinizi takip edin, planlayın ve teslimat süreçlerinizi etkin şekilde yönetin.
+            </p>
+          </div>
+
+          {/* Illustration - inline SVG (simple, corporate) */}
+          <div className="mt-8 lg:mt-10 relative max-w-lg hidden sm:block">
+            <svg viewBox="0 0 520 260" className="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
+              {/* Ground/route */}
+              <ellipse cx="260" cy="230" rx="230" ry="14" fill="#e0e7ff" opacity="0.6" />
+              <path d="M 40 220 Q 180 170 260 200 T 480 180" stroke="#3b82f6" strokeWidth="2.5" strokeDasharray="6 6" fill="none" opacity="0.6" />
+
+              {/* Origin pin */}
+              <g transform="translate(50 195)">
+                <circle cx="0" cy="0" r="14" fill="#3b82f6" opacity="0.15" />
+                <circle cx="0" cy="0" r="7" fill="#3b82f6" />
+                <circle cx="0" cy="0" r="3" fill="#fff" />
+              </g>
+
+              {/* Destination pin */}
+              <g transform="translate(470 170)">
+                <path d="M0 -22 C -12 -22, -12 -8, 0 4 C 12 -8, 12 -22, 0 -22 Z" fill="#4f46e5" />
+                <circle cx="0" cy="-14" r="4" fill="#fff" />
+              </g>
+
+              {/* Truck (simplified isometric) */}
+              <g transform="translate(180 100)">
+                {/* Shadow */}
+                <ellipse cx="80" cy="130" rx="110" ry="10" fill="#1e40af" opacity="0.12" />
+                {/* Trailer body */}
+                <rect x="0" y="30" width="130" height="80" rx="6" fill="#1e40af" />
+                <rect x="4" y="34" width="122" height="72" rx="4" fill="#2563eb" />
+                {/* Container lines */}
+                <line x1="45" y1="34" x2="45" y2="106" stroke="#1e40af" strokeWidth="1.5" opacity="0.5" />
+                <line x1="85" y1="34" x2="85" y2="106" stroke="#1e40af" strokeWidth="1.5" opacity="0.5" />
+                {/* Cabin */}
+                <path d="M130 60 L165 60 L175 78 L175 110 L130 110 Z" fill="#3b82f6" />
+                <path d="M138 68 L165 68 L172 80 L138 80 Z" fill="#bfdbfe" opacity="0.9" />
+                {/* Wheels */}
+                <circle cx="30" cy="115" r="12" fill="#0f172a" />
+                <circle cx="30" cy="115" r="5" fill="#475569" />
+                <circle cx="95" cy="115" r="12" fill="#0f172a" />
+                <circle cx="95" cy="115" r="5" fill="#475569" />
+                <circle cx="150" cy="115" r="12" fill="#0f172a" />
+                <circle cx="150" cy="115" r="5" fill="#475569" />
+                {/* Headlight */}
+                <rect x="170" y="88" width="6" height="6" rx="1" fill="#fbbf24" />
+              </g>
+
+              {/* Package on top */}
+              <g transform="translate(220 70)">
+                <rect x="0" y="0" width="34" height="30" rx="3" fill="#f59e0b" />
+                <rect x="0" y="0" width="34" height="30" rx="3" fill="#fbbf24" opacity="0.6" />
+                <line x1="17" y1="0" x2="17" y2="30" stroke="#b45309" strokeWidth="1.5" opacity="0.5" />
+                <line x1="0" y1="15" x2="34" y2="15" stroke="#b45309" strokeWidth="1.5" opacity="0.5" />
+              </g>
+            </svg>
+          </div>
+
+          {/* Feature grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-8 lg:mt-10 max-w-lg">
+            {features.map((f, i) => (
+              <div key={i} className="flex flex-col items-start gap-2">
+                <div className={`w-11 h-11 rounded-xl ${f.bg} flex items-center justify-center ${f.tone}`}>
+                  <f.icon className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-900 leading-tight">{f.title}</p>
+                  <p className="text-xs text-slate-500 leading-tight">{f.sub}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Giriş Yap</CardTitle>
-            <CardDescription>Operasyon rolünüzle giriş yapın</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div>
-              <Label>Kullanıcı Adı</Label>
-              <Input value={username} onChange={e => setUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && doLogin(username, password)} />
-            </div>
-            <div>
-              <Label>Şifre</Label>
-              <Input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && doLogin(username, password)} />
-            </div>
-            <Button className="w-full" disabled={loading || !username || !password} onClick={() => doLogin(username, password)}>
-              {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
-            </Button>
+        <p className="text-xs text-slate-500 mt-10">© 2026 YükTakip · Tüm hakları saklıdır.</p>
+      </div>
 
-            {demoUsers.length > 0 && (
-              <>
-                <div className="relative py-2">
-                  <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200" /></div>
-                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-500">Demo Kullanıcıları</span></div>
+      {/* RIGHT PANEL — Login form */}
+      <div className="lg:w-1/2 flex items-center justify-center p-6 sm:p-10 bg-slate-50">
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/60 border border-slate-100 p-6 sm:p-8">
+            <div className="flex justify-center mb-4">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
+                <Lock className="w-6 h-6" />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-center text-slate-900">Kullanıcı Girişi</h2>
+            <p className="text-center text-slate-500 text-sm mt-1">Devam etmek için lütfen giriş yapın.</p>
+
+            <div className="mt-6 space-y-4">
+              <div>
+                <Label className="text-sm font-medium text-slate-700">Kullanıcı Adı</Label>
+                <div className="relative mt-1.5">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input
+                    className="pl-9 h-11"
+                    placeholder="Kullanıcı adınızı girin"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && doLogin(username, password)}
+                  />
                 </div>
-                <div className="grid gap-2">
+              </div>
+              <div>
+                <Label className="text-sm font-medium text-slate-700">Şifre</Label>
+                <div className="relative mt-1.5">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    className="pl-9 pr-10 h-11"
+                    placeholder="Şifrenizi girin"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && doLogin(username, password)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+                    aria-label="Şifreyi göster/gizle"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-sm">
+                <label className="flex items-center gap-2 text-slate-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                  Beni hatırla
+                </label>
+                <button type="button" className="text-blue-600 hover:text-blue-700 font-medium">Şifremi unuttum?</button>
+              </div>
+
+              <Button
+                className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-base gap-2"
+                disabled={loading || !username || !password}
+                onClick={() => doLogin(username, password)}
+              >
+                {loading ? 'Giriş yapılıyor...' : (<>Giriş Yap <ArrowRight className="w-4 h-4" /></>)}
+              </Button>
+            </div>
+
+            {/* Divider */}
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200" /></div>
+              <div className="relative flex justify-center"><span className="bg-white px-3 text-xs text-slate-500">veya</span></div>
+            </div>
+
+            {/* Demo accounts */}
+            {demoUsers.length > 0 && (
+              <div className="bg-blue-50/60 rounded-xl border border-blue-100 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                    <AlertCircle className="w-3 h-3" />
+                  </div>
+                  <p className="font-semibold text-slate-900 text-sm">Demo Hesaplar</p>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed mb-3">
+                  Sistemi farklı rollerle deneyimlemek için aşağıdaki demo hesapları kullanabilirsiniz.
+                </p>
+                <div className="space-y-2">
                   {demoUsers.map(du => {
                     const role = du.roles?.[0]
-                    const colors = { yuk_sorumlusu: 'from-blue-500 to-indigo-500', arac_planlama: 'from-amber-500 to-orange-500', depocu: 'from-emerald-500 to-green-500' }
-                    const icons = { yuk_sorumlusu: Package, arac_planlama: Truck, depocu: PackageCheck }
-                    const I = icons[role] || User
+                    const meta = roleMeta[role] || { I: User, tone: 'text-slate-600', bg: 'bg-slate-100' }
+                    const I = meta.I
                     return (
-                      <button key={du.username} onClick={() => doLogin(du.username, du.password)} disabled={loading}
-                        className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-slate-50 transition text-left">
-                        <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${colors[role] || 'from-slate-500 to-slate-600'} flex items-center justify-center text-white flex-shrink-0`}>
+                      <button
+                        key={du.username}
+                        onClick={() => doLogin(du.username, du.password)}
+                        disabled={loading}
+                        className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white transition text-left disabled:opacity-60"
+                      >
+                        <div className={`w-8 h-8 rounded-lg ${meta.bg} ${meta.tone} flex items-center justify-center flex-shrink-0`}>
                           <I className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm">{ROLE_LABELS[role] || role}</p>
-                          <p className="text-xs text-slate-500">{du.username} / {du.password}</p>
+                          <p className="text-sm font-medium text-slate-900 leading-tight">{ROLE_LABELS[role] || role}</p>
                         </div>
-                        <ArrowLeft className="w-4 h-4 text-slate-400 rotate-180" />
+                        <div className="text-right">
+                          <p className="text-xs text-slate-700 font-mono leading-tight">{du.username}</p>
+                          <p className="text-xs text-slate-500 font-mono leading-tight">{du.password}</p>
+                        </div>
                       </button>
                     )
                   })}
                 </div>
-              </>
+              </div>
             )}
-          </CardContent>
-        </Card>
-        <p className="text-center text-xs text-slate-500 mt-4">YükTakip MVP · Rol tabanlı giriş</p>
+
+            <p className="text-center text-xs text-slate-500 mt-6">
+              Sorun mu yaşıyorsunuz? <span className="text-blue-600 font-medium">Sistem Yöneticisi</span> ile iletişime geçin.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   )
