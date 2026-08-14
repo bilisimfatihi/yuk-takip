@@ -282,7 +282,7 @@ backend:
         agent: "main"
         comment: "POST /api/seed loads sample companies, addresses, drivers, vehicles. Verified via curl. Now requires yuk_sorumlusu role."
 
-  - task: "Authentication (login/logout/me/init) + demo user auto-provisioning"
+  - task: "Authentication (login/logout/me/init) + demo user auto-provisioning + Admin bootstrap + password hashing"
     implemented: true
     working: true
     file: "/app/app/api/[[...path]]/route.js"
@@ -290,21 +290,25 @@ backend:
     priority: "high"
     needs_retesting: false
     status_history:
+      - working: true
+        agent: "testing"
+        comment: "Previously passed 42/42 tests for basic auth (login/logout/me/init)."
       - working: "NA"
         agent: "main"
         comment: |
-          Added collections: users, sessions.
-          Endpoints (all public / no auth needed):
-          - POST /api/auth/init - creates 3 demo users if missing, returns their creds.
-            Demo users: {username, password, roles}:
-              yukler / 1234 -> [yuk_sorumlusu]
-              planlama / 1234 -> [arac_planlama]
-              depo / 1234 -> [depocu]
-          - POST /api/auth/login {username, password} -> {token, user}. Wrong creds -> 401.
-            Token stored in sessions collection.
-          - POST /api/auth/logout with Authorization: Bearer <token> -> deletes session.
-          - GET /api/auth/me with Bearer token -> returns current user (no password).
-            No token / invalid token -> 401.
+          MAJOR UPDATE - Auth system enhanced:
+          1. Password hashing via Node crypto.scryptSync (format: 'scrypt$salt$hash').
+             Legacy plaintext passwords still accepted (backward compat) but auto-migrated
+             to hashed form on next successful login or /auth/init call.
+          2. Admin bootstrap: /auth/init now also ensures an Admin user from env vars
+             ADMIN_EMAIL / ADMIN_PASSWORD (defaults: admin@yuktakip.local / admin123).
+             Admin user has role 'admin' and is NOT included in /auth/init's demoUsers array.
+          3. Existing demo users (yukler/planlama/depo) preserved but now have `email`
+             field (@yuktakip.local) and hashed passwords. Old plaintext '1234' still
+             logs in and gets rehashed on first successful login.
+          4. Login accepts either username OR email in the `username` field.
+             Also new fields `email` and `login` supported for the login body.
+          5. GET /auth/me now returns user object that ALSO includes 'email' field.
       - working: true
         agent: "testing"
         comment: |
@@ -329,14 +333,174 @@ backend:
           
           All authentication endpoints working correctly. Token generation, session management, 
           and user data sanitization (no password/no _id) all verified.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ADMIN BOOTSTRAP & PASSWORD HASHING RETESTED (10/10 tests passed)
+          
+          Scenario 1 - Admin Bootstrap & Login:
+          - Admin user created successfully via /auth/init
+          - Login with admin@yuktakip.local/admin123 works (returns token, roles=['admin'])
+          - Login with username 'admin'/admin123 also works
+          - GET /auth/me returns admin user with email field, no password/no _id
+          - All 3 demo users (yukler/planlama/depo) still login with '1234'
+          
+          Scenario 7 - Legacy Migration:
+          - Verified all demo users can login with plaintext password '1234'
+          - Password migration to scrypt format happens automatically on login
+          
+          All admin bootstrap and password hashing features working correctly.
 
-  - task: "Role-based authorization for all backend endpoints"
+  - task: "Role-based authorization for all backend endpoints (with Admin bypass)"
     implemented: true
     working: true
     file: "/app/app/api/[[...path]]/route.js"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Previously passed 100/100 tests for RBAC across 3 roles."
+      - working: "NA"
+        agent: "main"
+        comment: |
+          UPDATED - Added 4th role 'admin'. Admin bypass added in auth gate: if user has
+          the 'admin' role, all role checks are skipped. This applies to /status
+          per-status role check as well (admin can set any status).
+          The existing rules for yuk_sorumlusu / arac_planlama / depocu are UNCHANGED.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ADMIN BYPASS RETESTED (7/7 tests passed)
+          
+          Scenario 2 - Admin Bypass:
+          - Admin can POST /companies (was YS-only) ✅
+          - Admin can POST /drivers (was AP-only) ✅
+          - Admin can POST /vehicles (was AP-only) ✅
+          - Admin can POST /loads (was YS-only) ✅
+          - Admin can POST /loads/:id/plan (was AP-only) ✅
+          - Admin can set status='delivered' (was depocu-only) ✅
+          - Admin can set status='shipped' (was YS-only) ✅
+          
+          Admin role successfully bypasses all role restrictions. All previously role-restricted
+          endpoints are now accessible to admin users.
+
+  - task: "User management CRUD endpoints (admin only)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW endpoints - all admin-only:
+          - GET /api/users - list all users. Password field is NEVER returned.
+          - POST /api/users - body: {name, email, password, roles[], active?, username?}.
+            * name, email, password required.
+            * roles[] must be non-empty and each role must be one of:
+              admin, yuk_sorumlusu, arac_planlama, depocu (invalid roles filtered out).
+            * username derived from email prefix if not provided.
+            * Duplicate email or username -> 400.
+          - PUT /api/users/:id - update name, email, username, roles, active.
+            Safety guards:
+              * Removing 'admin' role from last active admin -> 400
+              * Deactivating last active admin -> 400
+              * Empty roles -> 400
+              * Email/username collisions with other users -> 400
+          - DELETE /api/users/:id - deletes user AND all their sessions.
+            * Cannot delete self -> 400
+            * Cannot delete last admin -> 400
+          - POST /api/users/:id/reset-password - body: {newPassword}.
+            * newPassword length >= 4
+            * Updates hashed password and DELETES all user's sessions (forces re-login).
+
+          Non-admin roles (yuk_sorumlusu, arac_planlama, depocu) hitting ANY /users
+          endpoint MUST get 403.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ USER MANAGEMENT CRUD TESTED (40/40 tests passed)
+          
+          Scenario 3 - User CRUD (as admin):
+          
+          **User Creation:**
+          - POST /users creates user successfully with auto-derived username ✅
+          - Response excludes password field ✅
+          - Empty roles returns 400 ✅
+          - Duplicate email returns 400 ✅
+          - Only invalid roles returns 400 ✅
+          - Mixed valid/invalid roles: invalid filtered out, valid stored ✅
+          
+          **Multi-role Users:**
+          - User with roles=['yuk_sorumlusu','arac_planlama'] can login ✅
+          - Can access YS endpoints (POST /companies) ✅
+          - Can access AP endpoints (POST /drivers) ✅
+          - Cannot access admin endpoints (GET /users returns 403) ✅
+          
+          **User Updates:**
+          - PUT /users/:id updates roles successfully ✅
+          - PUT /users/:id deactivates user (active=false) ✅
+          - Deactivated user cannot login ✅
+          
+          **Safety Guards:**
+          - Cannot remove admin role from last admin (400) ✅
+          - Cannot deactivate last active admin (400) ✅
+          - Admin cannot delete own account (400) ✅
+          
+          **Password Reset:**
+          - Admin can reset user password ✅
+          - Old token invalid after reset (session purged) ✅
+          - Old password doesn't work after reset ✅
+          - New password works after reset ✅
+          
+          **Non-admin Access:**
+          - Non-admin GET /users returns 403 ✅
+          - Non-admin POST /users returns 403 ✅
+          - Non-admin PUT /users/:id returns 403 ✅
+          - Non-admin DELETE /users/:id returns 403 ✅
+          - Non-admin POST /users/:id/reset-password returns 403 ✅
+          
+          All user management endpoints working correctly with proper admin-only access control.
+
+  - task: "Self password change endpoint"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW: POST /api/auth/change-password (any authenticated user, all 4 roles).
+          Body: {currentPassword, newPassword}.
+          - Verifies currentPassword against stored hash.
+          - Requires newPassword length >= 4.
+          - Hashes and updates password.
+          - Wrong current password -> 400 with "Mevcut şifre hatalı".
+          - Missing fields -> 400.
+          - No token -> 401.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ SELF PASSWORD CHANGE TESTED (8/8 tests passed)
+          
+          Scenario 4 - Self Password Change:
+          - POST /auth/change-password succeeds with correct currentPassword ✅
+          - Old password doesn't work after change ✅
+          - New password works after change ✅
+          - Admin can restore password via reset-password ✅
+          - Wrong currentPassword returns 400 ✅
+          - Error message is 'Mevcut şifre hatalı' ✅
+          - newPassword < 4 chars returns 400 ✅
+          - Without token returns 401 ✅
+          
+          All self password change functionality working correctly.
     status_history:
       - working: "NA"
         agent: "main"
@@ -439,7 +603,11 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Authentication (login/logout/me/init) + demo user auto-provisioning + Admin bootstrap + password hashing"
+    - "Role-based authorization for all backend endpoints (with Admin bypass)"
+    - "User management CRUD endpoints (admin only)"
+    - "Self password change endpoint"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -666,3 +834,160 @@ agent_communication:
       is enforced exactly as specified. No critical issues found.
       
       Test file: /app/backend_test_auth.py
+  - agent: "main"
+    message: |
+      ADMIN USER MANAGEMENT ADDED - Please test the new user & role management system.
+
+      Setup:
+      - .env now has ADMIN_EMAIL=admin@yuktakip.local, ADMIN_PASSWORD=admin123
+      - POST /api/auth/init creates/ensures the admin user with role 'admin' (in addition
+        to the existing yukler/planlama/depo demo users).
+      - Passwords are now hashed with Node's crypto.scrypt (format: 'scrypt$salt$hash').
+        Old plaintext passwords still verify (backward compat) and get migrated on next
+        login or /auth/init call.
+
+      Login credentials to use:
+        admin@yuktakip.local / admin123   (or username: 'admin')  -> [admin]
+        yukler / 1234    (or yukler@yuktakip.local)               -> [yuk_sorumlusu]
+        planlama / 1234  (or planlama@yuktakip.local)             -> [arac_planlama]
+        depo / 1234      (or depo@yuktakip.local)                 -> [depocu]
+
+      New endpoints to test:
+
+      (A) User management (admin only — non-admins must get 403):
+        - GET  /api/users                  -> list users (never returns password)
+        - POST /api/users                  -> {name, email, password, roles[], active?, username?}
+        - PUT  /api/users/:id              -> update name/email/username/roles/active
+        - DELETE /api/users/:id            -> delete + invalidate sessions
+        - POST /api/users/:id/reset-password -> {newPassword}, also deletes user sessions
+
+      (B) Self password change (any authenticated user):
+        - POST /api/auth/change-password   -> {currentPassword, newPassword}
+
+      Critical scenarios (test all):
+
+      1. Admin bootstrap:
+         - After /auth/init, admin can login with admin@yuktakip.local + admin123.
+         - Login with username 'admin' + 'admin123' also works.
+         - /auth/me returns roles=['admin'] and email field set.
+
+      2. Admin bypass:
+         - Admin can call ALL endpoints that were previously YS/AP/DP-only:
+           * POST /loads (previously YS-only) -> 200
+           * POST /loads/:id/plan (previously AP-only) -> 200
+           * POST /loads/:id/status with any status incl. 'delivered' (previously depocu-only) -> 200
+           * POST /drivers (previously AP-only) -> 200
+           * POST /companies (previously YS-only) -> 200
+
+      3. User CRUD as admin:
+         - POST /users {name:'Test', email:'test@x.com', password:'test123', roles:['yuk_sorumlusu']}
+           -> 200, user created with username auto-derived from email prefix.
+         - POST /users {roles:[]} -> 400 (empty roles)
+         - POST /users with duplicate email -> 400
+         - POST /users with roles containing invalid role like 'super' -> should filter invalid out; if remaining roles empty -> 400
+         - POST /users with multiple roles ['yuk_sorumlusu','arac_planlama'] -> 200, user has both.
+         - PUT /users/:id with roles=['depocu'] -> 200, roles updated.
+         - PUT /users/:id changing admin's own role away from admin while admin is the ONLY admin -> 400.
+         - PUT /users/:id setting active=false on the only active admin -> 400.
+         - DELETE /users/:id trying to delete self -> 400.
+         - POST /users/:id/reset-password with {newPassword:'newpass123'} -> 200.
+           After that, previously logged-in user with old password gets 401 on protected calls (sessions invalidated).
+         - GET/POST/PUT/DELETE any /users endpoint as yuk_sorumlusu, arac_planlama, or depocu -> 403.
+
+      4. Self password change:
+         - As yuk_sorumlusu, POST /auth/change-password {currentPassword:'1234', newPassword:'newpw123'} -> 200.
+         - Login again with old password -> 401.
+         - Login with new password -> 200.
+         - Change back to '1234' for cleanup or leave user alone.
+         - Wrong currentPassword -> 400.
+         - newPassword shorter than 4 chars -> 400.
+         - Without token -> 401.
+
+      5. Multi-role user permissions:
+         - Create a user with roles=['yuk_sorumlusu','arac_planlama'] and login as them.
+         - They should be able to POST /loads (YS permission) AND POST /loads/:id/plan (AP permission).
+         - They should NOT be able to hit /users (admin only) -> 403.
+
+      6. Data preservation:
+         - Existing companies/addresses/drivers/vehicles/loads must not be affected by
+           any of the auth changes. Verify counts before/after.
+         - Existing demo users still login with old password '1234'.
+
+      Password verification internals:
+         - Fresh user creation stores password hashed as 'scrypt$salt$hash'.
+         - Login response never includes password field.
+         - GET /users response never includes password field.
+         - GET /auth/me never includes password field.
+
+      Base URL: {NEXT_PUBLIC_BASE_URL}/api from /app/.env
+      DO NOT call POST /api/seed (it deletes production data).
+
+
+  - agent: "testing"
+    message: |
+      ✅ ADMIN USER MANAGEMENT + PASSWORD HASHING TESTING COMPLETE (65/65 tests passed)
+      
+      Comprehensive testing of the new admin user management and password hashing system completed successfully.
+      
+      ## Test Coverage Summary:
+      
+      ### Scenario 1: Admin Bootstrap & Login (10 tests) ✅
+      - Admin user created via /auth/init with credentials from .env
+      - Login works with both email (admin@yuktakip.local) and username (admin)
+      - Admin user has correct roles=['admin'] and email field
+      - All demo users (yukler/planlama/depo) still work with password '1234'
+      - User objects never include password or _id fields
+      
+      ### Scenario 2: Admin Bypass (7 tests) ✅
+      - Admin can access ALL previously role-restricted endpoints:
+        * POST /companies (was YS-only)
+        * POST /drivers (was AP-only)
+        * POST /vehicles (was AP-only)
+        * POST /loads (was YS-only)
+        * POST /loads/:id/plan (was AP-only)
+        * Set status='delivered' (was depocu-only)
+        * Set status='shipped' (was YS-only)
+      
+      ### Scenario 3: User CRUD (40 tests) ✅
+      - User creation with auto-derived username from email
+      - Validation: empty roles, duplicate email, invalid roles all return 400
+      - Invalid roles filtered out, valid roles preserved
+      - Multi-role users can access endpoints from all their roles
+      - User updates (roles, active status) work correctly
+      - Safety guards working:
+        * Cannot remove admin role from last admin
+        * Cannot deactivate last active admin
+        * Admin cannot delete own account
+      - Password reset invalidates all user sessions
+      - Non-admin users get 403 on all /users endpoints
+      
+      ### Scenario 4: Self Password Change (8 tests) ✅
+      - Any authenticated user can change their own password
+      - Old password stops working after change
+      - New password works immediately
+      - Wrong currentPassword returns 400 with Turkish error message
+      - Password length validation (min 4 chars)
+      - Requires authentication (401 without token)
+      
+      ### Scenario 5: Data Preservation (4 tests) ✅
+      - All existing data preserved (companies, drivers, vehicles, loads)
+      - Counts verified before and after all tests
+      - No production data lost
+      
+      ### Scenario 6: Password Format (4 tests) ✅
+      - New users created with scrypt hashed passwords
+      - Login works with plaintext password (hash verification)
+      - Password field NEVER returned in any response:
+        * POST /auth/login
+        * GET /auth/me
+        * GET /users
+      
+      ### Scenario 7: Legacy Migration (3 tests) ✅
+      - All demo users can still login with plaintext password '1234'
+      - Password migration to scrypt format happens automatically on login
+      - Backward compatibility maintained
+      
+      ## Summary:
+      All admin user management and password hashing features working correctly. No critical issues found.
+      
+      Test file: /app/backend_test_admin.py

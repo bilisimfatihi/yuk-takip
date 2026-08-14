@@ -16,7 +16,7 @@ import {
   Package, Truck, Building2, MapPin, User, Users, Plus, Search, Filter,
   Send, CheckCircle2, Clock, AlertCircle, PackageCheck, LayoutDashboard,
   Trash2, Edit, ArrowLeft, ArrowRight, Phone, Calendar, MessageCircle, X,
-  Lock, Eye, EyeOff
+  Lock, Eye, EyeOff, Shield, Key, LogOut, Settings
 } from 'lucide-react'
 
 const SHIPMENT_TYPES = {
@@ -72,10 +72,17 @@ const api = async (path, opts = {}) => {
 }
 
 // Role constants (must match backend)
-const ROLE = { YS: 'yuk_sorumlusu', AP: 'arac_planlama', DP: 'depocu' }
-const ROLE_LABELS = { yuk_sorumlusu: 'Yük Sorumlusu', arac_planlama: 'Araç Planlama', depocu: 'Depocu' }
+const ROLE = { ADMIN: 'admin', YS: 'yuk_sorumlusu', AP: 'arac_planlama', DP: 'depocu' }
+const ROLE_LABELS = { admin: 'Admin', yuk_sorumlusu: 'Yük Sorumlusu', arac_planlama: 'Araç Planlama', depocu: 'Depocu' }
+const ROLE_COLORS = {
+  admin: 'bg-purple-100 text-purple-800 border-purple-300',
+  yuk_sorumlusu: 'bg-blue-100 text-blue-800 border-blue-300',
+  arac_planlama: 'bg-amber-100 text-amber-800 border-amber-300',
+  depocu: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+}
 const hasRole = (user, r) => user && Array.isArray(user.roles) && user.roles.includes(r)
 const hasAny = (user, arr) => arr.some(r => hasRole(user, r))
+const isAdmin = (user) => hasRole(user, ROLE.ADMIN)
 
 function App() {
   const [user, setUser] = useState(null)
@@ -383,18 +390,21 @@ function MainApp({ user, onLogout }) {
   const [drivers, setDrivers] = useState([])
   const [vehicles, setVehicles] = useState([])
   const [dashboard, setDashboard] = useState({ total: 0, pending: 0, planning: 0, planned: 0, delivered: 0 })
+  const [pwOpen, setPwOpen] = useState(false)
 
   // Compute which tabs user can see
   const availableTabs = useMemo(() => {
+    const admin = isAdmin(user)
     const tabs = [
       { k: 'dashboard', l: 'Dashboard', I: LayoutDashboard, roles: [ROLE.YS, ROLE.AP, ROLE.DP] },
       { k: 'loads', l: 'Yükler', I: Package, roles: [ROLE.YS, ROLE.AP, ROLE.DP] },
       { k: 'companies', l: 'Firmalar', I: Building2, roles: [ROLE.YS] },
       { k: 'drivers', l: 'Şoförler', I: Users, roles: [ROLE.AP] },
-      { k: 'vehicles', l: 'Araçlar', I: Truck, roles: [ROLE.AP, ROLE.DP] },
-    ].filter(t => hasAny(user, t.roles))
-    // vehicles for depocu is read-only, but they don't really need it. Restrict to arac_planlama only.
-    return tabs.filter(t => !(t.k === 'vehicles' && !hasRole(user, ROLE.AP)))
+      { k: 'vehicles', l: 'Araçlar', I: Truck, roles: [ROLE.AP] },
+      { k: 'users', l: 'Kullanıcı Yönetimi', I: Shield, roles: [] }, // admin only
+    ]
+    // Admin sees everything; others see only tabs matching their roles
+    return tabs.filter(t => admin || hasAny(user, t.roles))
   }, [user])
 
   const canView = (k) => availableTabs.some(t => t.k === k) || k === 'detail'
@@ -455,16 +465,19 @@ function MainApp({ user, onLogout }) {
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden sm:flex items-center gap-2 mr-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
-              <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
-                <User className="w-3.5 h-3.5" />
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center ${isAdmin(user) ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                {isAdmin(user) ? <Shield className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
               </div>
               <div className="text-xs leading-tight">
                 <p className="font-medium">{user.name}</p>
                 <p className="text-slate-500">{(user.roles || []).map(r => ROLE_LABELS[r] || r).join(', ')}</p>
               </div>
             </div>
+            <Button variant="outline" size="sm" onClick={() => setPwOpen(true)} className="gap-1">
+              <Key className="w-3.5 h-3.5" /><span className="hidden sm:inline">Şifre</span>
+            </Button>
             <Button variant="outline" size="sm" onClick={onLogout} className="gap-1">
-              <X className="w-3.5 h-3.5" />Çıkış
+              <LogOut className="w-3.5 h-3.5" /><span className="hidden sm:inline">Çıkış</span>
             </Button>
           </div>
         </div>
@@ -508,6 +521,9 @@ function MainApp({ user, onLogout }) {
         {view === 'vehicles' && canView('vehicles') && (
           <VehiclesView vehicles={vehicles} onRefresh={refreshAll} />
         )}
+        {view === 'users' && canView('users') && (
+          <UsersView currentUser={user} />
+        )}
         {!canView(view) && (
           <div className="text-center py-16">
             <AlertCircle className="w-12 h-12 mx-auto text-slate-300 mb-2" />
@@ -516,6 +532,8 @@ function MainApp({ user, onLogout }) {
           </div>
         )}
       </main>
+
+      <ChangePasswordDialog open={pwOpen} onClose={() => setPwOpen(false)} />
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-xs text-slate-500">
         YükTakip MVP · Yükleri hızlı topla, hızlı planla
@@ -1452,6 +1470,344 @@ function VehicleForm({ vehicle, onClose, onSaved }) {
       </div>
       <DialogFooter><Button variant="outline" onClick={onClose}>İptal</Button><Button onClick={save}>Kaydet</Button></DialogFooter>
     </DialogContent>
+  )
+}
+
+// ============ USERS MANAGEMENT (ADMIN ONLY) ============
+function UsersView({ currentUser }) {
+  const [users, setUsers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [openCreate, setOpenCreate] = useState(false)
+  const [editUser, setEditUser] = useState(null)
+  const [resetUser, setResetUser] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    try { const list = await api('users'); setUsers(list) } catch (e) { toast.error(e.message) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const toggleActive = async (u) => {
+    try { await api(`users/${u.id}`, { method: 'PUT', body: JSON.stringify({ active: !u.active }) }); toast.success('Kullanıcı güncellendi'); load() }
+    catch (e) { toast.error(e.message) }
+  }
+  const del = async (u) => {
+    if (!confirm(`${u.name} kullanıcısı silinsin mi?`)) return
+    try { await api(`users/${u.id}`, { method: 'DELETE' }); toast.success('Silindi'); load() } catch (e) { toast.error(e.message) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h2 className="text-2xl font-bold flex items-center gap-2"><Shield className="w-6 h-6 text-purple-600" />Kullanıcı Yönetimi</h2>
+          <p className="text-slate-500 text-sm">{users.length} kullanıcı · Yalnızca Admin bu ekrana erişebilir</p>
+        </div>
+        <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+          <DialogTrigger asChild>
+            <Button className="gap-2"><Plus className="w-4 h-4" />Yeni Kullanıcı</Button>
+          </DialogTrigger>
+          <UserForm onClose={() => setOpenCreate(false)} onSaved={() => { setOpenCreate(false); load() }} />
+        </Dialog>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="text-center py-12 text-slate-500">Yükleniyor...</div>
+          ) : users.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+              <Users className="w-12 h-12 mx-auto mb-2 text-slate-300" />
+              <p>Kullanıcı yok</p>
+            </div>
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr className="text-left text-xs text-slate-600 uppercase">
+                      <th className="px-3 py-2">Ad Soyad</th>
+                      <th className="px-3 py-2">E-posta</th>
+                      <th className="px-3 py-2">Kullanıcı Adı</th>
+                      <th className="px-3 py-2">Roller</th>
+                      <th className="px-3 py-2">Durum</th>
+                      <th className="px-3 py-2">Oluşturulma</th>
+                      <th className="px-3 py-2 text-right">İşlemler</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {users.map(u => (
+                      <tr key={u.id} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 font-medium">
+                          <div className="flex items-center gap-2">
+                            {u.roles?.includes('admin') && <Shield className="w-4 h-4 text-purple-600" />}
+                            {u.name}
+                            {u.id === currentUser.id && <Badge variant="outline" className="text-xs">Sen</Badge>}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{u.email || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600 text-xs font-mono">{u.username}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {(u.roles || []).map(r => (
+                              <Badge key={r} className={ROLE_COLORS[r] + ' text-xs'}>{ROLE_LABELS[r] || r}</Badge>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {u.active ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300">Aktif</Badge> : <Badge className="bg-slate-200 text-slate-700">Pasif</Badge>}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{u.createdAt ? new Date(u.createdAt).toLocaleDateString('tr-TR') : '-'}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1 justify-end">
+                            <Button variant="outline" size="sm" onClick={() => setEditUser(u)} title="Düzenle"><Edit className="w-3.5 h-3.5" /></Button>
+                            <Button variant="outline" size="sm" onClick={() => setResetUser(u)} title="Şifre Sıfırla"><Key className="w-3.5 h-3.5" /></Button>
+                            <Button variant="outline" size="sm" onClick={() => toggleActive(u)} title={u.active ? 'Pasifleştir' : 'Aktifleştir'}>
+                              {u.active ? <X className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                            </Button>
+                            {u.id !== currentUser.id && (
+                              <Button variant="outline" size="sm" onClick={() => del(u)} className="text-rose-600" title="Sil"><Trash2 className="w-3.5 h-3.5" /></Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-slate-100">
+                {users.map(u => (
+                  <div key={u.id} className="p-4">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold">{u.name}</p>
+                          {u.id === currentUser.id && <Badge variant="outline" className="text-xs">Sen</Badge>}
+                        </div>
+                        <p className="text-xs text-slate-500">{u.email}</p>
+                        <p className="text-xs text-slate-400 font-mono">@{u.username}</p>
+                      </div>
+                      {u.active ? <Badge className="bg-emerald-100 text-emerald-800 text-xs">Aktif</Badge> : <Badge className="bg-slate-200 text-slate-700 text-xs">Pasif</Badge>}
+                    </div>
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {(u.roles || []).map(r => <Badge key={r} className={ROLE_COLORS[r] + ' text-xs'}>{ROLE_LABELS[r] || r}</Badge>)}
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      <Button variant="outline" size="sm" onClick={() => setEditUser(u)}><Edit className="w-3.5 h-3.5 mr-1" />Düzenle</Button>
+                      <Button variant="outline" size="sm" onClick={() => setResetUser(u)}><Key className="w-3.5 h-3.5 mr-1" />Şifre Sıfırla</Button>
+                      <Button variant="outline" size="sm" onClick={() => toggleActive(u)}>{u.active ? 'Pasifleştir' : 'Aktifleştir'}</Button>
+                      {u.id !== currentUser.id && (
+                        <Button variant="outline" size="sm" onClick={() => del(u)} className="text-rose-600">Sil</Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {editUser && (
+        <Dialog open={!!editUser} onOpenChange={() => setEditUser(null)}>
+          <UserForm user={editUser} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); load() }} />
+        </Dialog>
+      )}
+      {resetUser && (
+        <Dialog open={!!resetUser} onOpenChange={() => setResetUser(null)}>
+          <ResetPasswordDialog targetUser={resetUser} onClose={() => setResetUser(null)} />
+        </Dialog>
+      )}
+    </div>
+  )
+}
+
+function UserForm({ user, onClose, onSaved }) {
+  const isEdit = !!user
+  const [f, setF] = useState({
+    name: user?.name || '',
+    email: user?.email || '',
+    username: user?.username || '',
+    password: '',
+    roles: user?.roles || [ROLE.YS],
+    active: user?.active !== false,
+  })
+  const [saving, setSaving] = useState(false)
+
+  const toggleRole = (r) => {
+    setF(prev => ({
+      ...prev,
+      roles: prev.roles.includes(r) ? prev.roles.filter(x => x !== r) : [...prev.roles, r]
+    }))
+  }
+
+  const save = async () => {
+    if (!f.name || !f.email) return toast.error('Ad Soyad ve e-posta zorunlu')
+    if (!isEdit && !f.password) return toast.error('Şifre zorunlu')
+    if (f.roles.length === 0) return toast.error('En az bir rol seçin')
+    setSaving(true)
+    try {
+      if (isEdit) {
+        const upd = { name: f.name, email: f.email, roles: f.roles, active: f.active }
+        if (f.username) upd.username = f.username
+        await api(`users/${user.id}`, { method: 'PUT', body: JSON.stringify(upd) })
+      } else {
+        await api('users', { method: 'POST', body: JSON.stringify(f) })
+      }
+      toast.success(isEdit ? 'Kullanıcı güncellendi' : 'Kullanıcı oluşturuldu')
+      onSaved()
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <DialogContent className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{isEdit ? 'Kullanıcı Düzenle' : 'Yeni Kullanıcı'}</DialogTitle>
+        <DialogDescription>Kullanıcı bilgilerini girin ve rol atamasını yapın.</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        <div>
+          <Label>Ad Soyad *</Label>
+          <Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} />
+        </div>
+        <div>
+          <Label>E-posta *</Label>
+          <Input type="email" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} />
+        </div>
+        <div>
+          <Label>Kullanıcı Adı {isEdit ? '' : '(boş bırakılırsa e-postadan türetilir)'}</Label>
+          <Input value={f.username} onChange={e => setF({ ...f, username: e.target.value })} placeholder={isEdit ? '' : 'İsteğe bağlı'} />
+        </div>
+        {!isEdit && (
+          <div>
+            <Label>Şifre *</Label>
+            <Input type="text" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} placeholder="En az 4 karakter" />
+          </div>
+        )}
+        <div>
+          <Label>Roller * (birden fazla seçilebilir)</Label>
+          <div className="grid grid-cols-2 gap-2 mt-1.5">
+            {[ROLE.ADMIN, ROLE.YS, ROLE.AP, ROLE.DP].map(r => {
+              const on = f.roles.includes(r)
+              return (
+                <button key={r} type="button" onClick={() => toggleRole(r)}
+                  className={`text-left px-3 py-2 rounded-lg border transition ${on ? 'bg-blue-50 border-blue-500 text-blue-900' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${on ? 'bg-blue-600 border-blue-600' : 'border-slate-300'}`}>
+                      {on && <CheckCircle2 className="w-3 h-3 text-white" />}
+                    </div>
+                    <span className="text-sm font-medium">{ROLE_LABELS[r]}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch checked={f.active} onCheckedChange={v => setF({ ...f, active: v })} />
+          <Label>Aktif</Label>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>İptal</Button>
+        <Button onClick={save} disabled={saving}>{saving ? 'Kaydediliyor...' : 'Kaydet'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  )
+}
+
+function ResetPasswordDialog({ targetUser, onClose }) {
+  const [pw, setPw] = useState('')
+  const [saving, setSaving] = useState(false)
+  const save = async () => {
+    if (!pw || pw.length < 4) return toast.error('Şifre en az 4 karakter olmalı')
+    setSaving(true)
+    try {
+      await api(`users/${targetUser.id}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword: pw }) })
+      toast.success('Şifre sıfırlandı. Kullanıcının tüm oturumları kapatıldı.')
+      onClose()
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Şifre Sıfırla</DialogTitle>
+        <DialogDescription>{targetUser.name} için yeni şifre belirle. Kullanıcının aktif oturumları kapanacak.</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        <Label>Yeni Şifre</Label>
+        <Input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="En az 4 karakter" />
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>İptal</Button>
+        <Button onClick={save} disabled={saving}>{saving ? 'Kaydediliyor...' : 'Şifreyi Sıfırla'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  )
+}
+
+// ============ CHANGE PASSWORD (SELF) ============
+function ChangePasswordDialog({ open, onClose }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [showCurr, setShowCurr] = useState(false)
+  const [showNext, setShowNext] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { if (!open) { setCurrent(''); setNext(''); setConfirm('') } }, [open])
+
+  const save = async () => {
+    if (!current || !next) return toast.error('Tüm alanları doldurun')
+    if (next.length < 4) return toast.error('Yeni şifre en az 4 karakter olmalı')
+    if (next !== confirm) return toast.error('Yeni şifreler eşleşmiyor')
+    setSaving(true)
+    try {
+      await api('auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: current, newPassword: next }) })
+      toast.success('Şifre değiştirildi')
+      onClose()
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Key className="w-5 h-5" />Şifre Değiştir</DialogTitle>
+          <DialogDescription>Güvenliğiniz için mevcut şifrenizi doğrulamanız gerekir.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label>Mevcut Şifre</Label>
+            <div className="relative">
+              <Input type={showCurr ? 'text' : 'password'} value={current} onChange={e => setCurrent(e.target.value)} className="pr-10" />
+              <button type="button" onClick={() => setShowCurr(!showCurr)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                {showCurr ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+          <div>
+            <Label>Yeni Şifre</Label>
+            <div className="relative">
+              <Input type={showNext ? 'text' : 'password'} value={next} onChange={e => setNext(e.target.value)} className="pr-10" />
+              <button type="button" onClick={() => setShowNext(!showNext)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                {showNext ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+          <div>
+            <Label>Yeni Şifre (Tekrar)</Label>
+            <Input type={showNext ? 'text' : 'password'} value={confirm} onChange={e => setConfirm(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>İptal</Button>
+          <Button onClick={save} disabled={saving}>{saving ? 'Kaydediliyor...' : 'Şifreyi Değiştir'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
