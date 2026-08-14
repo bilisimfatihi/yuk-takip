@@ -537,7 +537,7 @@ function MainApp({ user, onLogout }) {
       <ChangePasswordDialog open={pwOpen} onClose={() => setPwOpen(false)} />
 
       <footer className="border-t border-slate-200 bg-white py-3 text-center text-xs text-slate-500">
-        YükTakip MVP · Yükleri hızlı topla, hızlı planla
+        YükTakip · Yükleri hızlı topla, hızlı planla
       </footer>
     </div>
   )
