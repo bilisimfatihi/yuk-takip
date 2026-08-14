@@ -411,8 +411,9 @@ function MainApp({ user, onLogout }) {
 
   const refreshAll = async () => {
     try {
+      const admin = isAdmin(user)
       const canGetCompanies = true // read for all
-      const canGetDrivers = hasAny(user, [ROLE.YS, ROLE.AP])
+      const canGetDrivers = admin || hasAny(user, [ROLE.YS, ROLE.AP])
       const [recent, c, a, d, v, dash] = await Promise.all([
         api('loads?page=1&pageSize=6'),
         canGetCompanies ? api('companies') : Promise.resolve([]),
