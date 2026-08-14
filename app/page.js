@@ -45,11 +45,24 @@ const STATUS_COLORS = {
   cancelled: 'bg-rose-100 text-rose-800 border border-rose-300',
 }
 
+const TOKEN_KEY = 'yuktakip_token'
+
+const getToken = () => (typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null)
+const setToken = (t) => { if (typeof window !== 'undefined') { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY) } }
+
+// Global logout hook set by App to clear session on 401
+let onUnauthorized = null
+
 const api = async (path, opts = {}) => {
-  const res = await fetch('/api/' + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  })
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  const token = getToken()
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  const res = await fetch('/api/' + path, { ...opts, headers })
+  if (res.status === 401) {
+    if (onUnauthorized) onUnauthorized()
+    const e = await res.json().catch(() => ({ error: 'Yetkisiz' }))
+    throw new Error(e.error || 'Yetkisiz')
+  }
   if (!res.ok) {
     const e = await res.json().catch(() => ({ error: 'İstek hatası' }))
     throw new Error(e.error || 'Hata')
@@ -57,8 +70,137 @@ const api = async (path, opts = {}) => {
   return res.json()
 }
 
+// Role constants (must match backend)
+const ROLE = { YS: 'yuk_sorumlusu', AP: 'arac_planlama', DP: 'depocu' }
+const ROLE_LABELS = { yuk_sorumlusu: 'Yük Sorumlusu', arac_planlama: 'Araç Planlama', depocu: 'Depocu' }
+const hasRole = (user, r) => user && Array.isArray(user.roles) && user.roles.includes(r)
+const hasAny = (user, arr) => arr.some(r => hasRole(user, r))
+
 function App() {
-  const [view, setView] = useState('dashboard') // dashboard | loads | companies | drivers | vehicles | detail
+  const [user, setUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
+
+  // Check existing session on mount
+  useEffect(() => {
+    onUnauthorized = () => { setToken(null); setUser(null) }
+    const token = getToken()
+    if (!token) { setAuthChecked(true); return }
+    api('auth/me').then(u => { setUser(u); setAuthChecked(true) }).catch(() => { setToken(null); setAuthChecked(true) })
+  }, [])
+
+  const handleLogin = (token, u) => {
+    setToken(token)
+    setUser(u)
+  }
+
+  const handleLogout = async () => {
+    try { await api('auth/logout', { method: 'POST' }) } catch (e) {}
+    setToken(null)
+    setUser(null)
+  }
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-slate-500">Yükleniyor...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
+  return <MainApp user={user} onLogout={handleLogout} />
+}
+
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [demoUsers, setDemoUsers] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    api('auth/init', { method: 'POST' }).then(d => setDemoUsers(d.demoUsers || [])).catch(() => {})
+  }, [])
+
+  const doLogin = async (u, p) => {
+    setLoading(true)
+    try {
+      const res = await api('auth/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) })
+      onLogin(res.token, res.user)
+      toast.success('Hoş geldin, ' + res.user.name)
+    } catch (e) { toast.error(e.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 mx-auto rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg">
+            <Truck className="w-7 h-7" />
+          </div>
+          <h1 className="text-2xl font-bold mt-3">YükTakip</h1>
+          <p className="text-slate-500 text-sm">Lojistik Operasyon Paneli</p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Giriş Yap</CardTitle>
+            <CardDescription>Operasyon rolünüzle giriş yapın</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <Label>Kullanıcı Adı</Label>
+              <Input value={username} onChange={e => setUsername(e.target.value)} onKeyDown={e => e.key === 'Enter' && doLogin(username, password)} />
+            </div>
+            <div>
+              <Label>Şifre</Label>
+              <Input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && doLogin(username, password)} />
+            </div>
+            <Button className="w-full" disabled={loading || !username || !password} onClick={() => doLogin(username, password)}>
+              {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
+            </Button>
+
+            {demoUsers.length > 0 && (
+              <>
+                <div className="relative py-2">
+                  <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200" /></div>
+                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-500">Demo Kullanıcıları</span></div>
+                </div>
+                <div className="grid gap-2">
+                  {demoUsers.map(du => {
+                    const role = du.roles?.[0]
+                    const colors = { yuk_sorumlusu: 'from-blue-500 to-indigo-500', arac_planlama: 'from-amber-500 to-orange-500', depocu: 'from-emerald-500 to-green-500' }
+                    const icons = { yuk_sorumlusu: Package, arac_planlama: Truck, depocu: PackageCheck }
+                    const I = icons[role] || User
+                    return (
+                      <button key={du.username} onClick={() => doLogin(du.username, du.password)} disabled={loading}
+                        className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-slate-50 transition text-left">
+                        <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${colors[role] || 'from-slate-500 to-slate-600'} flex items-center justify-center text-white flex-shrink-0`}>
+                          <I className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm">{ROLE_LABELS[role] || role}</p>
+                          <p className="text-xs text-slate-500">{du.username} / {du.password}</p>
+                        </div>
+                        <ArrowLeft className="w-4 h-4 text-slate-400 rotate-180" />
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        <p className="text-center text-xs text-slate-500 mt-4">YükTakip MVP · Rol tabanlı giriş</p>
+      </div>
+    </div>
+  )
+}
+
+function MainApp({ user, onLogout }) {
+  const [view, setView] = useState('dashboard')
   const [selectedLoadId, setSelectedLoadId] = useState(null)
   const [dashRecent, setDashRecent] = useState([])
   const [hasAnyLoads, setHasAnyLoads] = useState(false)
@@ -68,11 +210,32 @@ function App() {
   const [vehicles, setVehicles] = useState([])
   const [dashboard, setDashboard] = useState({ total: 0, pending: 0, planning: 0, planned: 0, delivered: 0 })
 
+  // Compute which tabs user can see
+  const availableTabs = useMemo(() => {
+    const tabs = [
+      { k: 'dashboard', l: 'Dashboard', I: LayoutDashboard, roles: [ROLE.YS, ROLE.AP, ROLE.DP] },
+      { k: 'loads', l: 'Yükler', I: Package, roles: [ROLE.YS, ROLE.AP, ROLE.DP] },
+      { k: 'companies', l: 'Firmalar', I: Building2, roles: [ROLE.YS] },
+      { k: 'drivers', l: 'Şoförler', I: Users, roles: [ROLE.AP] },
+      { k: 'vehicles', l: 'Araçlar', I: Truck, roles: [ROLE.AP, ROLE.DP] },
+    ].filter(t => hasAny(user, t.roles))
+    // vehicles for depocu is read-only, but they don't really need it. Restrict to arac_planlama only.
+    return tabs.filter(t => !(t.k === 'vehicles' && !hasRole(user, ROLE.AP)))
+  }, [user])
+
+  const canView = (k) => availableTabs.some(t => t.k === k) || k === 'detail'
+
   const refreshAll = async () => {
     try {
+      const canGetCompanies = true // read for all
+      const canGetDrivers = hasAny(user, [ROLE.YS, ROLE.AP])
       const [recent, c, a, d, v, dash] = await Promise.all([
         api('loads?page=1&pageSize=6'),
-        api('companies'), api('addresses'), api('drivers'), api('vehicles'), api('dashboard')
+        canGetCompanies ? api('companies') : Promise.resolve([]),
+        canGetCompanies ? api('addresses') : Promise.resolve([]),
+        canGetDrivers ? api('drivers') : Promise.resolve([]),
+        api('vehicles'),
+        api('dashboard'),
       ])
       setDashRecent(recent.items || [])
       setHasAnyLoads((recent.total || 0) > 0)
@@ -81,14 +244,6 @@ function App() {
   }
 
   useEffect(() => { refreshAll() }, [])
-
-  const seedData = async () => {
-    try {
-      await api('seed', { method: 'POST' })
-      toast.success('Örnek veriler yüklendi')
-      refreshAll()
-    } catch (e) { toast.error(e.message) }
-  }
 
   const [selectedLoad, setSelectedLoad] = useState(null)
 
@@ -103,6 +258,12 @@ function App() {
     if (!selectedLoadId) return
     try { const d = await api(`loads/${selectedLoadId}`); setSelectedLoad(d) } catch (e) { toast.error(e.message) }
   }
+
+  // If current view no longer accessible, redirect to dashboard
+  useEffect(() => {
+    if (!canView(view)) setView('dashboard')
+  }, [view, availableTabs])
+
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -119,9 +280,18 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {!hasAnyLoads && companies.length === 0 && (
-              <Button variant="outline" size="sm" onClick={seedData}>Örnek Veri Yükle</Button>
-            )}
+            <div className="hidden sm:flex items-center gap-2 mr-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
+              <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+                <User className="w-3.5 h-3.5" />
+              </div>
+              <div className="text-xs leading-tight">
+                <p className="font-medium">{user.name}</p>
+                <p className="text-slate-500">{(user.roles || []).map(r => ROLE_LABELS[r] || r).join(', ')}</p>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={onLogout} className="gap-1">
+              <X className="w-3.5 h-3.5" />Çıkış
+            </Button>
           </div>
         </div>
       </header>
@@ -130,13 +300,7 @@ function App() {
       <nav className="bg-white border-b border-slate-200 sticky top-[65px] z-20">
         <div className="container mx-auto px-4">
           <div className="flex gap-1 overflow-x-auto">
-            {[
-              { k: 'dashboard', l: 'Dashboard', I: LayoutDashboard },
-              { k: 'loads', l: 'Yükler', I: Package },
-              { k: 'companies', l: 'Firmalar', I: Building2 },
-              { k: 'drivers', l: 'Şoförler', I: Users },
-              { k: 'vehicles', l: 'Araçlar', I: Truck },
-            ].map(({ k, l, I }) => (
+            {availableTabs.map(({ k, l, I }) => (
               <button key={k} onClick={() => { setView(k); setSelectedLoadId(null) }}
                 className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
                   view === k ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'
@@ -149,26 +313,33 @@ function App() {
       </nav>
 
       <main className="flex-1 container mx-auto px-4 py-6">
-        {view === 'dashboard' && (
-          <Dashboard dashboard={dashboard} loads={dashRecent} companies={companies} onOpenLoad={(id) => { setSelectedLoadId(id); setView('detail') }} onGoto={setView} />
+        {view === 'dashboard' && canView('dashboard') && (
+          <Dashboard dashboard={dashboard} loads={dashRecent} companies={companies} user={user} onOpenLoad={(id) => { setSelectedLoadId(id); setView('detail') }} onGoto={setView} />
         )}
-        {view === 'loads' && !selectedLoadId && (
-          <LoadsView companies={companies} addresses={addresses}
+        {view === 'loads' && !selectedLoadId && canView('loads') && (
+          <LoadsView companies={companies} addresses={addresses} user={user}
             onOpen={(id) => { setSelectedLoadId(id); setView('detail') }}
             onDataChanged={refreshAll} />
         )}
         {view === 'detail' && selectedLoad && (
-          <LoadDetail load={selectedLoad} companies={companies} addresses={addresses} drivers={drivers} vehicles={vehicles}
+          <LoadDetail load={selectedLoad} companies={companies} addresses={addresses} drivers={drivers} vehicles={vehicles} user={user}
             onBack={() => { setView('loads'); setSelectedLoadId(null) }} onRefresh={() => { refreshAll(); refreshSelected() }} />
         )}
-        {view === 'companies' && (
+        {view === 'companies' && canView('companies') && (
           <CompaniesView companies={companies} addresses={addresses} onRefresh={refreshAll} />
         )}
-        {view === 'drivers' && (
+        {view === 'drivers' && canView('drivers') && (
           <DriversView drivers={drivers} onRefresh={refreshAll} />
         )}
-        {view === 'vehicles' && (
+        {view === 'vehicles' && canView('vehicles') && (
           <VehiclesView vehicles={vehicles} onRefresh={refreshAll} />
+        )}
+        {!canView(view) && (
+          <div className="text-center py-16">
+            <AlertCircle className="w-12 h-12 mx-auto text-slate-300 mb-2" />
+            <p className="text-slate-500">Bu ekrana erişim yetkiniz yok.</p>
+            <Button className="mt-3" onClick={() => setView('dashboard')}>Dashboard'a Dön</Button>
+          </div>
         )}
       </main>
 
@@ -256,7 +427,8 @@ function Dashboard({ dashboard, loads, companies, onOpenLoad, onGoto }) {
 }
 
 // ============ LOADS LIST ============
-function LoadsView({ companies, addresses, onOpen, onDataChanged }) {
+function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
+  const canCreate = hasRole(user, ROLE.YS)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState('')
@@ -324,9 +496,11 @@ function LoadsView({ companies, addresses, onOpen, onDataChanged }) {
           </p>
         </div>
         <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-          <DialogTrigger asChild>
-            <Button className="gap-2"><Plus className="w-4 h-4" />Yeni Yük</Button>
-          </DialogTrigger>
+          {canCreate && (
+            <DialogTrigger asChild>
+              <Button className="gap-2"><Plus className="w-4 h-4" />Yeni Yük</Button>
+            </DialogTrigger>
+          )}
           <LoadCreateDialog companies={companies} addresses={addresses} onClose={() => setOpenCreate(false)} onCreated={() => { setOpenCreate(false); fetchLoads(); onDataChanged && onDataChanged() }} />
         </Dialog>
       </div>
@@ -571,7 +745,7 @@ function LoadCreateDialog({ companies, addresses, onClose, onCreated }) {
 }
 
 // ============ LOAD DETAIL ============
-function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onRefresh }) {
+function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBack, onRefresh }) {
   const [planOpen, setPlanOpen] = useState(false)
   const [plan, setPlan] = useState({ driverId: load.driverId || '', vehicleId: load.vehicleId || '', plannedDateTime: load.plannedDateTime || '' })
   const company = companies.find(c => c.id === load.companyId)
@@ -579,6 +753,10 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onR
   const driver = drivers.find(d => d.id === load.driverId)
   const vehicle = vehicles.find(v => v.id === load.vehicleId)
   const isIcNakliye = load.shipmentType === 'ic_nakliye'
+
+  const isYS = hasRole(user, ROLE.YS)
+  const isAP = hasRole(user, ROLE.AP)
+  const isDP = hasRole(user, ROLE.DP)
 
   const savePlan = async () => {
     try {
@@ -637,10 +815,13 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onR
 
   const nextActions = () => {
     const acts = []
-    if (load.status === 'created' && !isIcNakliye) acts.push({ k: 'shipped', l: 'Gönderildi Olarak İşaretle', variant: 'default', I: PackageCheck })
-    if (load.status === 'created' && isIcNakliye) acts.push({ k: 'planning', l: 'Planlamaya Al', variant: 'default', I: Clock })
-    if (load.status === 'planned') acts.push({ k: 'in_transit', l: 'Yolda Olarak İşaretle', variant: 'default', I: Truck })
-    if (load.status === 'in_transit' || load.status === 'planned') acts.push({ k: 'delivered', l: 'Depoya Ulaştı', variant: 'default', I: PackageCheck })
+    // yuk_sorumlusu can trigger creation/shipping/planning starts
+    if (isYS && load.status === 'created' && !isIcNakliye) acts.push({ k: 'shipped', l: 'Gönderildi Olarak İşaretle', variant: 'default', I: PackageCheck })
+    if (isYS && load.status === 'created' && isIcNakliye) acts.push({ k: 'planning', l: 'Planlamaya Al', variant: 'default', I: Clock })
+    // arac_planlama can mark as in transit
+    if (isAP && load.status === 'planned') acts.push({ k: 'in_transit', l: 'Yolda Olarak İşaretle', variant: 'default', I: Truck })
+    // depocu (or yuk_sorumlusu) can mark as delivered
+    if ((isDP || isYS) && (load.status === 'in_transit' || load.status === 'planned')) acts.push({ k: 'delivered', l: 'Depoya Ulaştı', variant: 'default', I: PackageCheck })
     return acts
   }
 
@@ -661,9 +842,11 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onR
                   <CardTitle className="text-xl">{company?.name || 'Firma'}</CardTitle>
                   <CardDescription>{load.loadDate} · {SHIPMENT_TYPES[load.shipmentType]}</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" onClick={deleteLoad} className="text-rose-600 hover:text-rose-700">
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                {isYS && (
+                  <Button variant="ghost" size="sm" onClick={deleteLoad} className="text-rose-600 hover:text-rose-700">
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
@@ -689,11 +872,13 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onR
                     <CardDescription>İç nakliye için planlama bilgileri</CardDescription>
                   </div>
                   <Dialog open={planOpen} onOpenChange={setPlanOpen}>
-                    <DialogTrigger asChild>
-                      <Button size="sm" className="gap-1">
-                        {driver ? <><Edit className="w-4 h-4" />Düzenle</> : <><Plus className="w-4 h-4" />Planla</>}
-                      </Button>
-                    </DialogTrigger>
+                    {isAP && (
+                      <DialogTrigger asChild>
+                        <Button size="sm" className="gap-1">
+                          {driver ? <><Edit className="w-4 h-4" />Düzenle</> : <><Plus className="w-4 h-4" />Planla</>}
+                        </Button>
+                      </DialogTrigger>
+                    )}
                     <DialogContent>
                       <DialogHeader>
                         <DialogTitle>Şoför ve Araç Planla</DialogTitle>
@@ -735,7 +920,7 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, onBack, onR
                 <Info label="Araç" value={vehicle ? `${vehicle.type} · ${vehicle.plate}` : 'Atanmadı'} />
                 <Info label="Planlanan" value={load.plannedDateTime ? load.plannedDateTime.replace('T', ' ') : '-'} />
               </CardContent>
-              {driver && (
+              {driver && isAP && (
                 <div className="px-6 pb-6">
                   <Button onClick={sendWhatsApp} className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700" size="lg">
                     <MessageCircle className="w-5 h-5" />

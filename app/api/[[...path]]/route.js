@@ -38,6 +38,108 @@ const STATUS_LABELS = {
   cancelled: 'İptal',
 }
 
+// --------- ROLES ---------
+const ROLES = {
+  YUK_SORUMLUSU: 'yuk_sorumlusu',
+  ARAC_PLANLAMA: 'arac_planlama',
+  DEPOCU: 'depocu',
+}
+
+const DEMO_USERS = [
+  { username: 'yukler',   password: '1234', name: 'Yük Sorumlusu Demo',   roles: [ROLES.YUK_SORUMLUSU] },
+  { username: 'planlama', password: '1234', name: 'Araç Planlama Demo',   roles: [ROLES.ARAC_PLANLAMA] },
+  { username: 'depo',     password: '1234', name: 'Depocu Demo',          roles: [ROLES.DEPOCU] },
+]
+
+async function ensureDemoUsers(db) {
+  const col = db.collection('users')
+  for (const u of DEMO_USERS) {
+    const existing = await col.findOne({ username: u.username })
+    if (!existing) {
+      await col.insertOne({
+        id: uuidv4(),
+        username: u.username,
+        password: u.password, // plain for MVP demo only
+        name: u.name,
+        roles: u.roles,
+        active: true,
+        createdAt: new Date().toISOString(),
+      })
+    }
+  }
+}
+
+async function getAuthUser(request, db) {
+  const auth = request.headers.get('authorization') || ''
+  const token = auth.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return null
+  const session = await db.collection('sessions').findOne({ token })
+  if (!session) return null
+  const user = await db.collection('users').findOne({ id: session.userId })
+  if (!user || user.active === false) return null
+  return user
+}
+
+function hasAnyRole(user, roles) {
+  if (!user || !Array.isArray(user.roles)) return false
+  return roles.some(r => user.roles.includes(r))
+}
+
+const ALL_ROLES = [ROLES.YUK_SORUMLUSU, ROLES.ARAC_PLANLAMA, ROLES.DEPOCU]
+
+// Determine which roles are allowed for a given (method, path).
+// Returns { public: true } | { public: false, roles: [...] } | { deny: true }
+function requiredRoles(method, path) {
+  // Public
+  if (path === 'auth/login' && method === 'POST') return { public: true }
+  if (path === 'auth/init' && (method === 'POST' || method === 'GET')) return { public: true }
+  if (path === 'auth/me' && method === 'GET') return { public: false, roles: ALL_ROLES }
+  if (path === 'auth/logout' && method === 'POST') return { public: false, roles: ALL_ROLES }
+
+  // Dashboard - all authenticated
+  if (path === 'dashboard' && method === 'GET') return { public: false, roles: ALL_ROLES }
+
+  // Loads
+  if (path === 'loads' && method === 'GET') return { public: false, roles: ALL_ROLES }
+  if (path === 'loads' && method === 'POST') return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+  if (/^loads\/[^/]+$/.test(path)) {
+    if (method === 'GET') return { public: false, roles: ALL_ROLES }
+    if (method === 'PUT' || method === 'DELETE') return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+  }
+  if (/^loads\/[^/]+\/plan$/.test(path) && method === 'POST') return { public: false, roles: [ROLES.ARAC_PLANLAMA] }
+  // /status - allowed for all roles but each role may only set specific statuses (enforced inside handler)
+  if (/^loads\/[^/]+\/status$/.test(path) && method === 'POST') return { public: false, roles: ALL_ROLES }
+
+  // Companies - read for all authenticated (needed to display names), write yuk_sorumlusu only
+  if (path === 'companies' && method === 'GET') return { public: false, roles: ALL_ROLES }
+  if (path === 'companies' && method === 'POST') return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+  if (/^companies\/[^/]+$/.test(path) && (method === 'PUT' || method === 'DELETE'))
+    return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+
+  // Addresses - read for all, write yuk_sorumlusu only
+  if (path === 'addresses' && method === 'GET') return { public: false, roles: ALL_ROLES }
+  if (path === 'addresses' && method === 'POST') return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+  if (/^addresses\/[^/]+$/.test(path) && (method === 'PUT' || method === 'DELETE'))
+    return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+
+  // Drivers - read for yuk_sorumlusu + arac_planlama, write arac_planlama only
+  if (path === 'drivers' && method === 'GET') return { public: false, roles: [ROLES.YUK_SORUMLUSU, ROLES.ARAC_PLANLAMA] }
+  if (path === 'drivers' && method === 'POST') return { public: false, roles: [ROLES.ARAC_PLANLAMA] }
+  if (/^drivers\/[^/]+$/.test(path) && (method === 'PUT' || method === 'DELETE'))
+    return { public: false, roles: [ROLES.ARAC_PLANLAMA] }
+
+  // Vehicles - read for all, write arac_planlama only
+  if (path === 'vehicles' && method === 'GET') return { public: false, roles: ALL_ROLES }
+  if (path === 'vehicles' && method === 'POST') return { public: false, roles: [ROLES.ARAC_PLANLAMA] }
+  if (/^vehicles\/[^/]+$/.test(path) && (method === 'PUT' || method === 'DELETE'))
+    return { public: false, roles: [ROLES.ARAC_PLANLAMA] }
+
+  // Seed - only yuk_sorumlusu (destructive), UI has been changed to not offer it once data exists
+  if (path === 'seed' && method === 'POST') return { public: false, roles: [ROLES.YUK_SORUMLUSU] }
+
+  return { deny: true }
+}
+
 async function handler(request, { params }) {
   const resolvedParams = await params
   const path = (resolvedParams?.path || []).join('/')
@@ -45,6 +147,57 @@ async function handler(request, { params }) {
   const db = await getDb()
 
   try {
+    // --- AUTHENTICATION / AUTHORIZATION GATE ---
+    const perm = requiredRoles(method, path)
+    if (perm.deny) return err('Endpoint bulunamadı: ' + path, 404)
+
+    let currentUser = null
+    if (!perm.public) {
+      currentUser = await getAuthUser(request, db)
+      if (!currentUser) return err('Yetkisiz - lütfen giriş yapın', 401)
+      if (!hasAnyRole(currentUser, perm.roles)) return err('Bu işlem için yetkiniz yok', 403)
+    }
+
+    // -------- AUTH ROUTES --------
+    if (path === 'auth/init' && (method === 'POST' || method === 'GET')) {
+      await ensureDemoUsers(db)
+      return json({
+        ok: true,
+        demoUsers: DEMO_USERS.map(u => ({ username: u.username, password: u.password, name: u.name, roles: u.roles })),
+      })
+    }
+
+    if (path === 'auth/login' && method === 'POST') {
+      await ensureDemoUsers(db)
+      const body = await request.json()
+      const { username, password } = body || {}
+      if (!username || !password) return err('Kullanıcı adı ve şifre zorunlu', 400)
+      const user = await db.collection('users').findOne({ username })
+      if (!user || user.password !== password || user.active === false) {
+        return err('Kullanıcı adı veya şifre hatalı', 401)
+      }
+      const token = uuidv4() + '.' + uuidv4()
+      await db.collection('sessions').insertOne({
+        token,
+        userId: user.id,
+        createdAt: new Date().toISOString(),
+      })
+      const { _id, password: _pw, ...safeUser } = user
+      return json({ token, user: safeUser })
+    }
+
+    if (path === 'auth/logout' && method === 'POST') {
+      const auth = request.headers.get('authorization') || ''
+      const token = auth.replace(/^Bearer\s+/i, '').trim()
+      if (token) await db.collection('sessions').deleteOne({ token })
+      return json({ ok: true })
+    }
+
+    if (path === 'auth/me' && method === 'GET') {
+      const { _id, password: _pw, ...safeUser } = currentUser
+      return json(safeUser)
+    }
+
     // -------- COMPANIES --------
     if (path === 'companies' && method === 'GET') {
       const list = await db.collection('companies').find({}).sort({ name: 1 }).toArray()
@@ -247,10 +400,10 @@ async function handler(request, { params }) {
         plannedDateTime: null,
         status: initialStatus,
         statusHistory: [
-          { status: initialStatus, at: now, user: body.user || 'sistem', note: 'Yük oluşturuldu' },
+          { status: initialStatus, at: now, user: currentUser.name || currentUser.username, note: 'Yük oluşturuldu' },
         ],
         createdAt: now,
-        createdBy: body.user || 'sistem',
+        createdBy: currentUser.name || currentUser.username,
       }
       await db.collection('loads').insertOne(doc)
       return json(clean(doc))
@@ -286,7 +439,7 @@ async function handler(request, { params }) {
       if (!load) return err('Yük yok', 404)
       const newHistory = [
         ...(load.statusHistory || []),
-        { status: 'planned', at: now, user: body.user || 'sistem', note: 'Araç/şoför planlandı' },
+        { status: 'planned', at: now, user: currentUser.name || currentUser.username, note: 'Araç/şoför planlandı' },
       ]
       await db.collection('loads').updateOne({ id }, { $set: {
         driverId: body.driverId || null,
@@ -304,11 +457,24 @@ async function handler(request, { params }) {
       const body = await request.json()
       const now = new Date().toISOString()
       if (!STATUS_LABELS[body.status]) return err('Geçersiz durum')
+
+      // Role-based status transition rules:
+      // - yuk_sorumlusu: any status
+      // - arac_planlama: planning, planned, in_transit, cancelled
+      // - depocu: delivered only
+      const allowedByRole = {
+        [ROLES.YUK_SORUMLUSU]: Object.keys(STATUS_LABELS),
+        [ROLES.ARAC_PLANLAMA]: ['planning', 'planned', 'in_transit', 'cancelled'],
+        [ROLES.DEPOCU]: ['delivered'],
+      }
+      const canSet = currentUser.roles.some(r => (allowedByRole[r] || []).includes(body.status))
+      if (!canSet) return err('Bu durum değişikliği için yetkiniz yok', 403)
+
       const load = await db.collection('loads').findOne({ id })
       if (!load) return err('Yük yok', 404)
       const newHistory = [
         ...(load.statusHistory || []),
-        { status: body.status, at: now, user: body.user || 'sistem', note: body.note || '' },
+        { status: body.status, at: now, user: currentUser.name || currentUser.username, note: body.note || '' },
       ]
       await db.collection('loads').updateOne({ id }, { $set: { status: body.status, statusHistory: newHistory } })
       const d = await db.collection('loads').findOne({ id })

@@ -280,7 +280,144 @@ backend:
     status_history:
       - working: true
         agent: "main"
-        comment: "POST /api/seed loads sample companies, addresses, drivers, vehicles. Verified via curl."
+        comment: "POST /api/seed loads sample companies, addresses, drivers, vehicles. Verified via curl. Now requires yuk_sorumlusu role."
+
+  - task: "Authentication (login/logout/me/init) + demo user auto-provisioning"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added collections: users, sessions.
+          Endpoints (all public / no auth needed):
+          - POST /api/auth/init - creates 3 demo users if missing, returns their creds.
+            Demo users: {username, password, roles}:
+              yukler / 1234 -> [yuk_sorumlusu]
+              planlama / 1234 -> [arac_planlama]
+              depo / 1234 -> [depocu]
+          - POST /api/auth/login {username, password} -> {token, user}. Wrong creds -> 401.
+            Token stored in sessions collection.
+          - POST /api/auth/logout with Authorization: Bearer <token> -> deletes session.
+          - GET /api/auth/me with Bearer token -> returns current user (no password).
+            No token / invalid token -> 401.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL AUTHENTICATION TESTS PASSED (42/42 tests)
+          
+          Comprehensive testing completed successfully:
+          
+          1. ✅ Init & Login Flow:
+             - POST /api/auth/init called twice - both succeed (idempotency verified)
+             - All 3 demo users created correctly with expected credentials
+             - Login as yukler/planlama/depo - all return valid tokens
+             - Token is non-empty string, user object contains id/username/name/roles
+             - User object does NOT contain password or _id fields (security verified)
+             - Wrong password returns 401 as expected
+             - Invalid token returns 401 for GET /api/auth/me
+             - Valid tokens return correct user data via GET /api/auth/me
+          
+          2. ✅ Unauthenticated Access:
+             - All non-auth endpoints return 401 without token:
+               GET /loads, /companies, /drivers, /vehicles, /dashboard
+               POST /loads, /companies
+          
+          All authentication endpoints working correctly. Token generation, session management, 
+          and user data sanitization (no password/no _id) all verified.
+
+  - task: "Role-based authorization for all backend endpoints"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added auth gate at top of handler. All non-auth endpoints require
+          Authorization: Bearer <token>. Without/invalid token -> 401.
+          Without required role -> 403.
+          
+          Permission matrix (verify each):
+          - GET /dashboard: all authenticated (YS, AP, DP)
+          - GET /loads (list with pagination): all authenticated
+          - GET /loads/:id: all authenticated
+          - POST /loads: yuk_sorumlusu ONLY (AP/DP => 403)
+          - PUT/DELETE /loads/:id: yuk_sorumlusu ONLY
+          - POST /loads/:id/plan: arac_planlama ONLY (YS/DP => 403)
+          - POST /loads/:id/status: authenticated + status-specific role check:
+              * yuk_sorumlusu: any status
+              * arac_planlama: only planning, planned, in_transit, cancelled
+              * depocu: only delivered  (setting anything else => 403)
+          - GET /companies: all authenticated
+          - POST /companies, PUT/DELETE /companies/:id: yuk_sorumlusu ONLY
+          - GET /addresses: all authenticated
+          - POST/PUT/DELETE /addresses: yuk_sorumlusu ONLY
+          - GET /drivers: yuk_sorumlusu OR arac_planlama (DP => 403)
+          - POST/PUT/DELETE /drivers: arac_planlama ONLY
+          - GET /vehicles: all authenticated
+          - POST/PUT/DELETE /vehicles: arac_planlama ONLY
+          - POST /seed: yuk_sorumlusu ONLY
+
+          Load create/plan/status endpoints now record currentUser.name (from token)
+          in statusHistory[].user and createdBy, not body.user. Verify by creating a
+          load and checking statusHistory[0].user matches the logged-in demo user name.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL AUTHORIZATION TESTS PASSED (58/58 tests)
+          
+          Comprehensive role-based permission matrix testing completed successfully:
+          
+          3. ✅ yuk_sorumlusu (yukler) Permissions:
+             - Can POST /loads, /companies, /addresses (all succeed)
+             - Can PUT/DELETE /loads, /companies, /addresses
+             - Can GET /drivers, /vehicles (read-only)
+             - Can set ANY status via POST /loads/:id/status (tested with 'created')
+             - CANNOT POST /loads/:id/plan (403 as expected)
+             - CANNOT POST /drivers, /vehicles (403 as expected)
+             - StatusHistory user field correctly set to "Yük Sorumlusu Demo"
+          
+          4. ✅ arac_planlama (planlama) Permissions:
+             - Can POST /drivers, /vehicles (all succeed)
+             - Can POST /loads/:id/plan (assigns driver/vehicle, sets status=planned)
+             - Can GET /companies, /addresses (read-only)
+             - Can set status: planning, planned, in_transit, cancelled (all succeed)
+             - CANNOT set status: delivered, shipped, created (all return 403 as expected)
+             - CANNOT POST /loads (403 as expected)
+             - CANNOT POST /companies, /addresses (403 as expected)
+             - StatusHistory user field correctly set to "Araç Planlama Demo"
+          
+          5. ✅ depocu (depo) Permissions:
+             - Can GET /loads, /loads/:id, /companies, /addresses, /vehicles, /dashboard
+             - Can set status: delivered ONLY (succeeds)
+             - CANNOT set status: planning, in_transit, shipped, cancelled, created (all return 403)
+             - CANNOT GET /drivers (403 as expected)
+             - CANNOT POST /loads, /companies, /addresses, /drivers, /vehicles (all 403)
+             - CANNOT POST /loads/:id/plan (403 as expected)
+             - StatusHistory user field correctly set to "Depocu Demo"
+          
+          6. ✅ StatusHistory User Field:
+             - Verified that statusHistory[].user is set from currentUser.name (token)
+             - NOT from body.user (security verified - body.user is ignored)
+             - All three roles correctly record their demo user names in history
+          
+          7. ✅ Data Preservation:
+             - Initial counts: companies=2, addresses=3, drivers=2, vehicles=2, loads=3
+             - Created test data: 1 company, 1 address, 1 driver, 1 vehicle, 1 load
+             - All test data cleaned up successfully
+             - Final counts match initial counts (no production data lost)
+          
+          All role-based permissions working exactly as specified. No critical issues found.
+          Test file: /app/backend_test_auth.py
+
 
 frontend:
   - task: "Full UI - Dashboard, Loads list/filters/detail, Companies+Addresses, Drivers, Vehicles, WhatsApp send"
@@ -345,6 +482,65 @@ agent_communication:
 
       (1) GET /api/loads - now paginated + server-side filtered.
           RESPONSE SHAPE CHANGED: was `[...]`, is now `{items, total, page, pageSize}`.
+  - agent: "main"
+    message: |
+      ROLE-BASED AUTH ADDED - Please test the new authentication and authorization system.
+
+      New endpoints:
+        POST /api/auth/init      (public)  - idempotently creates 3 demo users
+        POST /api/auth/login     (public)  - returns {token, user}
+        POST /api/auth/logout    (auth)    - invalidates token
+        GET  /api/auth/me        (auth)    - returns current user
+
+      Demo users (created by /auth/init):
+        yukler   / 1234  -> roles: [yuk_sorumlusu]  (name: "Yük Sorumlusu Demo")
+        planlama / 1234  -> roles: [arac_planlama]  (name: "Araç Planlama Demo")
+        depo     / 1234  -> roles: [depocu]         (name: "Depocu Demo")
+
+      All previous endpoints now require Authorization: Bearer <token> header.
+      No token or invalid token -> 401
+      Token valid but wrong role -> 403
+
+      Please test the FULL permission matrix. Key expectations:
+
+      # As yuk_sorumlusu (yukler):
+        - Can: POST /loads, PUT/DELETE /loads/:id, all /companies+/addresses,
+               GET /drivers (read), GET /vehicles (read)
+        - Cannot: POST /loads/:id/plan (403), POST/PUT/DELETE /drivers (403),
+                  POST/PUT/DELETE /vehicles (403)
+        - Can set status: any (created, planning, planned, in_transit, delivered, shipped, cancelled)
+
+      # As arac_planlama (planlama):
+        - Can: POST /loads/:id/plan, all /drivers, all /vehicles, GET /companies+/addresses
+        - Cannot: POST /loads (403), PUT/DELETE /loads/:id (403),
+                  POST/PUT/DELETE /companies (403), POST/PUT/DELETE /addresses (403)
+        - Can set status: planning, planned, in_transit, cancelled
+        - Cannot set status: created, delivered, shipped (403)
+
+      # As depocu (depo):
+        - Can: GET /loads, GET /loads/:id, GET /companies, GET /addresses,
+               GET /vehicles, GET /dashboard
+        - Cannot: POST /loads (403), any write on companies/addresses/drivers/vehicles (403),
+                  POST /loads/:id/plan (403), GET /drivers (403)
+        - Can set status: delivered ONLY. Any other status change => 403.
+
+      # Without token:
+        - Every non-auth endpoint returns 401
+
+      # Data preservation:
+        - Existing data (companies, addresses, drivers, vehicles, loads) MUST NOT be
+          wiped by adding auth. /auth/init only inserts users if missing, never touches
+          other collections. Verify by counting docs before/after calling /auth/init.
+
+      # StatusHistory user field:
+        - When yuk_sorumlusu creates a load, statusHistory[0].user should be the user's
+          name ("Yük Sorumlusu Demo"), not body.user.
+        - Similarly for /plan (as arac_planlama) and /status (as any role).
+
+      Base URL: {NEXT_PUBLIC_BASE_URL}/api from /app/.env
+      DO NOT run POST /api/seed (it deletes production data). Instead create fresh
+      test docs via authenticated POST calls, and clean up after your tests.
+
           Query params (optional):
             page (default 1), pageSize (default 50, max 200),
             status, companyId, shipmentType, date (YYYY-MM-DD), q (free-text)
@@ -412,3 +608,61 @@ agent_communication:
       
       Both endpoints working correctly. No critical issues found.
       Test file: /app/backend_test_pagination.py
+
+  - agent: "testing"
+    message: |
+      ✅ AUTHENTICATION & AUTHORIZATION TESTING COMPLETE (100/100 tests passed)
+      
+      Comprehensive testing of the new auth system completed successfully. All tests passed.
+      
+      ## Test Coverage:
+      
+      ### 1. Authentication Endpoints (42 tests) ✅
+      - POST /api/auth/init - Idempotency verified (called twice, both succeed)
+      - POST /api/auth/login - All 3 demo users login successfully
+      - Token generation working (non-empty strings returned)
+      - User objects sanitized (no password, no _id fields)
+      - Wrong password returns 401
+      - Invalid token returns 401
+      - GET /api/auth/me returns correct user data for valid tokens
+      - Unauthenticated access returns 401 for all protected endpoints
+      
+      ### 2. Role-Based Authorization (58 tests) ✅
+      
+      **yuk_sorumlusu (yukler):**
+      - ✅ Full CRUD on loads, companies, addresses
+      - ✅ Read-only access to drivers, vehicles
+      - ✅ Can set ANY status
+      - ✅ CANNOT plan loads (403)
+      - ✅ CANNOT create/modify drivers/vehicles (403)
+      
+      **arac_planlama (planlama):**
+      - ✅ Can plan loads (POST /loads/:id/plan)
+      - ✅ Full CRUD on drivers, vehicles
+      - ✅ Read-only access to companies, addresses
+      - ✅ Can set status: planning, planned, in_transit, cancelled
+      - ✅ CANNOT set status: created, delivered, shipped (403)
+      - ✅ CANNOT create/modify loads, companies, addresses (403)
+      
+      **depocu (depo):**
+      - ✅ Read-only access to loads, companies, addresses, vehicles, dashboard
+      - ✅ Can set status: delivered ONLY
+      - ✅ CANNOT set any other status (403)
+      - ✅ CANNOT access drivers (403)
+      - ✅ CANNOT create/modify anything (403)
+      
+      ### 3. StatusHistory User Field ✅
+      - Verified user names are set from token (currentUser.name)
+      - NOT from request body (security verified)
+      - All three roles correctly record their demo user names
+      
+      ### 4. Data Preservation ✅
+      - Initial counts preserved (companies=2, addresses=3, drivers=2, vehicles=2, loads=3)
+      - Test data created and cleaned up successfully
+      - No production data lost
+      
+      ## Summary:
+      All authentication and authorization features working correctly. The permission matrix 
+      is enforced exactly as specified. No critical issues found.
+      
+      Test file: /app/backend_test_auth.py
