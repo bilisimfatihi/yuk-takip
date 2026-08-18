@@ -952,9 +952,119 @@ function LoadCreateDialog({ companies, addresses, onClose, onCreated }) {
   )
 }
 
+function LoadEditDialog({ load, companies, addresses, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    loadDate: load.loadDate || '',
+    companyId: load.companyId || '',
+    addressId: load.addressId || '',
+    phone: load.phone || '',
+    packages: load.packages || '',
+    kg: load.kg || '',
+    m3: load.m3 || '',
+    dimensions: load.dimensions || '',
+    destCity: load.destCity || '',
+    destCountry: load.destCountry || '',
+    shipmentType: load.shipmentType || 'ic_nakliye',
+    note: load.note || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const companyAddresses = addresses.filter(a => a.companyId === form.companyId)
+
+  const save = async () => {
+    if (!form.companyId) return toast.error('Firma seçin')
+    if (!form.addressId) return toast.error('Firma adresi seçin')
+    setSaving(true)
+    try {
+      await api(`loads/${load.id}`, { method: 'PUT', body: JSON.stringify(form) })
+      toast.success('Yük güncellendi')
+      onSaved()
+    } catch (e) { toast.error(e.message) } finally { setSaving(false) }
+  }
+
+  return (
+    <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle>Yük Bilgilerini Düzenle</DialogTitle>
+        <DialogDescription>Yükün genel bilgilerini güncelleyin. Planlama ve durum geçmişi korunur.</DialogDescription>
+      </DialogHeader>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <Label>Yük Tarihi *</Label>
+          <Input type="date" value={form.loadDate} onChange={e => setForm({ ...form, loadDate: e.target.value })} />
+        </div>
+        <div>
+          <Label>Gönderim Şekli *</Label>
+          <Select value={form.shipmentType} onValueChange={v => setForm({ ...form, shipmentType: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(SHIPMENT_TYPES).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Müşteri Firma *</Label>
+          <Select value={form.companyId} onValueChange={v => setForm({ ...form, companyId: v, addressId: '' })}>
+            <SelectTrigger><SelectValue placeholder="Firma seçin" /></SelectTrigger>
+            <SelectContent>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Firma Adresi *</Label>
+          <Select value={form.addressId} onValueChange={v => setForm({ ...form, addressId: v })} disabled={!form.companyId}>
+            <SelectTrigger><SelectValue placeholder={form.companyId ? 'Adres seçin' : 'Önce firma seçin'} /></SelectTrigger>
+            <SelectContent>
+              {companyAddresses.map(a => <SelectItem key={a.id} value={a.id}>{a.name} · {a.city}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Telefon</Label>
+          <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="05xx..." />
+        </div>
+        <div>
+          <Label>Kap</Label>
+          <Input value={form.packages} onChange={e => setForm({ ...form, packages: e.target.value })} />
+        </div>
+        <div>
+          <Label>Kg</Label>
+          <Input value={form.kg} onChange={e => setForm({ ...form, kg: e.target.value })} />
+        </div>
+        <div>
+          <Label>m³</Label>
+          <Input value={form.m3} onChange={e => setForm({ ...form, m3: e.target.value })} />
+        </div>
+        <div className="md:col-span-2">
+          <Label>Ölçüler</Label>
+          <Input value={form.dimensions} onChange={e => setForm({ ...form, dimensions: e.target.value })} placeholder="örn. 120x80x100" />
+        </div>
+        <div>
+          <Label>Gideceği Şehir</Label>
+          <Input value={form.destCity} onChange={e => setForm({ ...form, destCity: e.target.value })} />
+        </div>
+        <div>
+          <Label>Gideceği Ülke</Label>
+          <Input value={form.destCountry} onChange={e => setForm({ ...form, destCountry: e.target.value })} />
+        </div>
+        <div className="md:col-span-2">
+          <Label>Not</Label>
+          <Textarea rows={3} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} />
+        </div>
+      </div>
+      <DialogFooter className="gap-2">
+        <Button variant="outline" onClick={onClose}>İptal</Button>
+        <Button onClick={save} disabled={saving}>{saving ? 'Kaydediliyor...' : 'Kaydet'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  )
+}
+
+
 // ============ LOAD DETAIL ============
 function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBack, onRefresh }) {
   const [planOpen, setPlanOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
   const [plan, setPlan] = useState({ driverId: load.driverId || '', vehicleId: load.vehicleId || '', dorseId: load.dorseId || '', plannedDateTime: load.plannedDateTime || '' })
   const company = companies.find(c => c.id === load.companyId)
   const address = addresses.find(a => a.id === load.addressId)
@@ -1065,9 +1175,14 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBac
                   <CardDescription>{load.loadDate} · {SHIPMENT_TYPES[load.shipmentType]}</CardDescription>
                 </div>
                 {isYS && (
-                  <Button variant="ghost" size="sm" onClick={deleteLoad} className="text-rose-600 hover:text-rose-700">
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} className="gap-1">
+                      <Edit className="w-4 h-4" />Düzenle
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={deleteLoad} className="text-rose-600 hover:text-rose-700">
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 )}
               </div>
             </CardHeader>
@@ -1216,6 +1331,15 @@ function LoadDetail({ load, companies, addresses, drivers, vehicles, user, onBac
           </CardContent>
         </Card>
       </div>
+
+      {/* Edit Load Dialog */}
+      {editOpen && (
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+          <LoadEditDialog load={load} companies={companies} addresses={addresses}
+            onClose={() => setEditOpen(false)}
+            onSaved={() => { setEditOpen(false); onRefresh() }} />
+        </Dialog>
+      )}
     </div>
   )
 }
