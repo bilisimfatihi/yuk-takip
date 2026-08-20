@@ -520,7 +520,7 @@ function MainApp({ user, onLogout }) {
           <Dashboard dashboard={dashboard} loads={dashRecent} companies={companies} user={user} onOpenLoad={(id) => { setSelectedLoadId(id); setView('detail') }} onGoto={setView} />
         )}
         {view === 'loads' && !selectedLoadId && canView('loads') && (
-          <LoadsView companies={companies} addresses={addresses} user={user}
+          <LoadsView companies={companies} addresses={addresses} drivers={drivers} vehicles={vehicles} user={user}
             onOpen={(id) => { setSelectedLoadId(id); setView('detail') }}
             onDataChanged={refreshAll} />
         )}
@@ -635,7 +635,7 @@ function Dashboard({ dashboard, loads, companies, onOpenLoad, onGoto }) {
 }
 
 // ============ LOADS LIST ============
-function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
+function LoadsView({ companies, addresses, drivers, vehicles, onOpen, onDataChanged, user }) {
   const canCreate = hasRole(user, ROLE.YS)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -680,6 +680,8 @@ function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
 
   const companyName = (id) => companies.find(c => c.id === id)?.name || '-'
   const addressCity = (id) => addresses.find(a => a.id === id)?.city || '-'
+  const driverName = (id) => drivers.find(d => d.id === id)?.name || null
+  const vehiclePlate = (id) => vehicles.find(v => v.id === id)?.plate || null
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1
@@ -770,12 +772,17 @@ function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
                       <th className="px-3 py-2">Kap</th>
                       <th className="px-3 py-2">Kg</th>
                       <th className="px-3 py-2">m³</th>
+                      <th className="px-3 py-2">Şoför / Araç</th>
                       <th className="px-3 py-2">Durum</th>
                       <th className="px-3 py-2"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {items.map(l => (
+                    {items.map(l => {
+                      const dn = driverName(l.driverId)
+                      const vp = vehiclePlate(l.vehicleId)
+                      const dp = vehiclePlate(l.dorseId)
+                      return (
                       <tr key={l.id} onClick={() => onOpen(l.id)} className="hover:bg-slate-50 cursor-pointer">
                         <td className="px-3 py-2 whitespace-nowrap">{l.loadDate}</td>
                         <td className="px-3 py-2 font-medium">{companyName(l.companyId)}</td>
@@ -785,16 +792,30 @@ function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
                         <td className="px-3 py-2">{l.packages}</td>
                         <td className="px-3 py-2">{l.kg}</td>
                         <td className="px-3 py-2">{l.m3}</td>
+                        <td className="px-3 py-2 text-xs">
+                          {dn || vp ? (
+                            <div className="leading-tight">
+                              {dn && <div className="font-medium text-slate-800">{dn}</div>}
+                              {vp && <div className="text-slate-500 font-mono">{vp}{dp && <span> + {dp}</span>}</div>}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2"><Badge className={STATUS_COLORS[l.status]}>{STATUS_LABELS[l.status]}</Badge></td>
                         <td className="px-3 py-2 text-right text-slate-400">→</td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
               {/* Mobile cards */}
               <div className="md:hidden divide-y divide-slate-100">
-                {items.map(l => (
+                {items.map(l => {
+                  const dn = driverName(l.driverId)
+                  const vp = vehiclePlate(l.vehicleId)
+                  const dp = vehiclePlate(l.dorseId)
+                  return (
                   <div key={l.id} onClick={() => onOpen(l.id)} className="p-4 hover:bg-slate-50 cursor-pointer">
                     <div className="flex justify-between items-start mb-1">
                       <p className="font-semibold">{companyName(l.companyId)}</p>
@@ -802,8 +823,15 @@ function LoadsView({ companies, addresses, onOpen, onDataChanged, user }) {
                     </div>
                     <p className="text-xs text-slate-500">{l.loadDate} · {addressCity(l.addressId)} → {l.destCity} {l.destCountry}</p>
                     <p className="text-xs text-slate-500 mt-1">{SHIPMENT_TYPES[l.shipmentType]} · {l.packages && `${l.packages} kap`} {l.kg && `· ${l.kg}kg`} {l.m3 && `· ${l.m3}m³`}</p>
+                    {(dn || vp) && (
+                      <p className="text-xs text-slate-600 mt-1">
+                        {dn && <span className="font-medium">{dn}</span>}
+                        {dn && vp && <span className="text-slate-400"> · </span>}
+                        {vp && <span className="font-mono">{vp}{dp && ` + ${dp}`}</span>}
+                      </p>
+                    )}
                   </div>
-                ))}
+                )})}
               </div>
             </>
           )}
