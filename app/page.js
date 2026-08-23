@@ -501,14 +501,15 @@ function MainApp({ user, onLogout }) {
 
       {/* Nav */}
       <nav className="bg-white border-b border-slate-200 sticky top-[65px] z-20">
-        <div className="container mx-auto px-4">
-          <div className="flex gap-1 overflow-x-auto">
+        <div className="container mx-auto px-1 md:px-4">
+          <div className="flex gap-0.5 md:gap-1 md:overflow-x-auto">
             {availableTabs.map(({ k, l, I }) => (
               <button key={k} onClick={() => { setView(k); setSelectedLoadId(null) }}
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                className={`flex flex-col md:flex-row items-center justify-center gap-0.5 md:gap-2 flex-1 md:flex-none min-w-0 px-1 md:px-4 py-2 md:py-3 text-[11px] md:text-sm font-medium border-b-2 md:whitespace-nowrap transition-colors ${
                   view === k ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}>
-                <I className="w-4 h-4" />{l}
+                <I className="w-4 h-4 flex-shrink-0" />
+                <span className="truncate w-full md:w-auto text-center md:text-left leading-tight">{l}</span>
               </button>
             ))}
           </div>
